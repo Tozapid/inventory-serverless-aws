@@ -6,7 +6,7 @@ Everything is stored in DynamoDB and S3 behind Cognito sign-in. Photos stay in a
 
 ## Demo
 
-**__SITE_URL__**
+**https://dbpex5dl2nq28.cloudfront.net**
 
 Sign in with `admin@example.com` / `admin123` (the fields are filled in for you).
 
