@@ -1,0 +1,94 @@
+{
+  "boxes": [
+    {
+      "number": "1",
+      "photo": "raspberry-pi",
+      "description": "Electronics: **Raspberry Pi** kit",
+      "contents": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m\n- 32 GB microSD card\n- USB power supply, 5 V 2.5 A",
+      "hidden": "Cardboard Raspberry Pi box with the raspberry logo, a black HDMI cable with a yellow label, a small black case, red and white bubble wrap.",
+      "history": [
+        {
+          "days": 40,
+          "before": "",
+          "after": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m",
+          "note": "Создание коробки"
+        },
+        {
+          "days": 12,
+          "before": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m",
+          "after": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m\n- 32 GB microSD card\n- USB power supply, 5 V 2.5 A",
+          "note": "Added the SD card and the charger"
+        }
+      ]
+    },
+    {
+      "number": "2",
+      "photo": "hand-tools",
+      "description": "Small hand tools",
+      "contents": "- Side cutters\n- Needle-nose pliers\n- Wire stripper\n\nClear plastic box, 28 × 10 cm.",
+      "hidden": "Transparent plastic box with orange-handled pliers and wire cutters on a dark table.",
+      "history": [
+        {
+          "days": 30,
+          "before": "",
+          "after": "- Side cutters\n- Needle-nose pliers\n- Wire stripper\n\nClear plastic box, 28 × 10 cm.",
+          "note": "Создание коробки"
+        }
+      ]
+    },
+    {
+      "number": "3",
+      "photo": "ornaments",
+      "description": "Christmas decorations",
+      "contents": "- 25 glass baubles, pastel\n- Tree topper star\n- Two strings of warm white lights\n\n*Fragile — keep on the top shelf.*",
+      "hidden": "Square cardboard tray with 25 glittery pastel Christmas baubles in pink, gold and silver.",
+      "history": [
+        {
+          "days": 300,
+          "before": "",
+          "after": "- 25 glass baubles, pastel\n- Tree topper star\n- Two strings of warm white lights\n\n*Fragile — keep on the top shelf.*",
+          "note": "Создание коробки"
+        }
+      ]
+    },
+    {
+      "number": "4",
+      "photo": "tool-cases",
+      "description": "Power tool cases",
+      "contents": "Stack of four cases, top to bottom:\n\n1. Cordless drill and bits\n2. Jigsaw and blades\n3. Orbital sander, discs 80–240\n4. Screws and wall plugs, sorted",
+      "hidden": "Stack of yellow, blue and grey Systainer plastic tool cases with latches and a handle on top.",
+      "history": [
+        {
+          "days": 60,
+          "before": "",
+          "after": "Stack of four cases, top to bottom:\n\n1. Cordless drill and bits\n2. Jigsaw and blades\n3. Orbital sander, discs 80–240\n4. Screws and wall plugs, sorted",
+          "note": "Создание коробки"
+        }
+      ]
+    },
+    {
+      "number": "5",
+      "photo": null,
+      "description": "Kitchen spares",
+      "contents": "- Spare blender jug\n- Pasta machine\n- Cookie cutters\n- Two tablecloths",
+      "hidden": "",
+      "history": []
+    },
+    {
+      "number": "12",
+      "photo": null,
+      "description": "Cables and chargers",
+      "contents": "- USB-C to USB-C, 2 m (×3)\n- Lightning cables (×2)\n- DisplayPort to HDMI adapter\n- Old laptop charger, 65 W",
+      "hidden": "",
+      "history": []
+    },
+    {
+      "number": "A-7",
+      "photo": null,
+      "description": "Camping gear — attic, left corner",
+      "contents": "- Two-person tent\n- Sleeping bags (×2)\n- Gas stove and one cartridge\n- Head torches",
+      "hidden": "",
+      "history": []
+    }
+  ]
+}

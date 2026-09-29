@@ -1,0 +1,141 @@
+name: terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time: Terraform also locks the state, this just avoids a queue of failed locks.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TERRAFORM_VERSION: "1.16.3"
+
+jobs:
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+      - name: terraform validate
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  lambda:
+    name: Lambda tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Unit tests
+        run: |
+          pip install --quiet boto3
+          cd lambda && python -m unittest -v lambda_app_test reset_test
+
+  web:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/web/package-lock.json
+      - name: JavaScript syntax
+        run: for f in web/*.js cloudfront/*.js; do node --check "$f"; done
+      - name: Install
+        working-directory: tests/web
+        run: npm ci
+      # The runner image has Google Chrome; the interface tests drive it.
+      - name: Tests
+        working-directory: tests/web
+        run: |
+          CHROME_PATH="$(command -v google-chrome)"
+          export CHROME_PATH
+          npm test
+
+  plan:
+    name: Plan
+    needs: [terraform, lambda, web]
+    # Pull requests from forks get no secrets, so only this repository's branches are planned.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: terraform init
+        run: >
+          terraform init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="key=inventory-serverless-aws/terraform.tfstate"
+          -backend-config="region=${{ env.AWS_REGION }}"
+      - name: terraform plan
+        run: |
+          terraform plan -lock=false -no-color -out=tfplan | tee plan.txt
+          { echo '### Plan'; echo '```'; grep -E '^(Plan:|No changes)|^  # ' plan.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply
+    needs: [terraform, lambda, web]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: terraform init
+        run: >
+          terraform init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="key=inventory-serverless-aws/terraform.tfstate"
+          -backend-config="region=${{ env.AWS_REGION }}"
+      - name: terraform plan
+        run: |
+          terraform plan -no-color -out=tfplan | tee plan.txt
+          { echo '### Plan'; echo '```'; grep -E '^(Plan:|No changes)|^  # ' plan.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # A plan that would destroy a bucket or the table needs a person, not CI.
+      - name: Refuse to destroy data
+        run: |
+          if grep -E '^  # aws_(s3_bucket|dynamodb_table|cognito_user_pool)\.[a-z_]+ (will be destroyed|must be replaced)' plan.txt; then
+            echo "::error::The plan destroys or replaces a bucket, the table or the user pool. Apply it by hand after checking."
+            exit 1
+          fi
+      - name: terraform apply
+        run: terraform apply -no-color tfplan
+      - name: Site address
+        run: |
+          echo "Site: $(terraform output -raw site_url)" >> "$GITHUB_STEP_SUMMARY"

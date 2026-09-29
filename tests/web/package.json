@@ -1,0 +1,13 @@
+{
+  "name": "inventory-serverless-aws-web-tests",
+  "private": true,
+  "description": "Tests for the page in web/: translations and the interface in Chrome.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3",
+    "puppeteer-core": "^23.11.1",
+    "qrcode-generator": "1.4.4"
+  }
+}
