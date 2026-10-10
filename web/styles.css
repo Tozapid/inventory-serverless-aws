@@ -440,6 +440,65 @@ fieldset.languages legend { font-weight: 600; margin-bottom: 8px; }
 
 .qr { display: block; width: 200px; height: 200px; }
 
+.label-choice { display: grid; gap: 4px; max-height: 320px; overflow: auto; margin: 8px 0; padding: 4px 0; border-block: 1px solid var(--line); }
+.label-choice .check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.label-choice .check input { width: auto; margin: 0; }
+
+.label-options { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin: 8px 0; }
+.label-settings { display: grid; gap: 8px; flex: 1 1 200px; }
+.label-settings select { width: 100%; padding: 8px; }
+.label-size { display: flex; gap: 8px; }
+.label-size label { flex: 1; }
+.label-show { border: 0; padding: 0; margin: 0; display: flex; gap: 12px; flex-wrap: wrap; }
+.label-show legend { font-size: 14px; padding: 0; margin-bottom: 4px; }
+.label-show .check { display: flex; gap: 6px; align-items: center; }
+.label-show input { width: auto; margin: 0; }
+.label-sample { display: grid; gap: 4px; justify-items: start; }
+.label-preview { overflow: hidden; box-shadow: 0 0 0 1px var(--line); }
+.label-preview .label { transform-origin: top left; }
+
+/* A label, the same on screen (the sample) and on paper. Sizes are set
+   inline from the chosen options. */
+.label {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #000;
+  background: #fff;
+}
+.label.wide { flex-direction: row; }
+.label .qr { flex: none; }
+.label-text { display: flex; flex-direction: column; justify-content: center; text-align: center; overflow: hidden; }
+.label.wide .label-text { text-align: left; }
+.label-number { font-weight: 700; line-height: 1.05; }
+.label-text.loose .label-number { overflow-wrap: anywhere; }
+.label-name { font-weight: 600; line-height: 1.15; margin-top: 0.15em; hyphens: none; }
+
+/* Label sheets are laid out off screen, so the text can be measured, and
+   shown only to the printer. */
+@media screen {
+  .print-labels { position: absolute; left: -10000px; top: 0; }
+}
+
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  body.printing-labels { background: #fff; }
+  body.printing-labels > :not(.print-labels) { display: none !important; }
+  .label-page {
+    box-sizing: border-box;
+    width: 210mm;
+    height: 297mm;
+    display: grid;
+    align-content: start;
+    break-after: page;
+  }
+  .label-page:last-child { break-after: auto; }
+  .label-page .label { outline: 0.2mm dashed #999; outline-offset: -0.1mm; }
+}
+
 .totp-secret, .secret-note code {
   font-family: var(--mono);
   padding: 1px 5px;

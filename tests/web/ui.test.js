@@ -87,6 +87,14 @@ const COGNITO = `(() => {
 })();`;
 
 const QRCODE = fs.readFileSync(require.resolve("qrcode-generator/qrcode.js"));
+
+// The Content-Security-Policy CloudFront sends with the page, read from
+// locals.tf, so that the page is tested under the same rules as the site.
+const CSP = [...fs.readFileSync(path.join(__dirname, "..", "..", "locals.tf"), "utf8")
+  .match(/csp = join\("; ", \[([\s\S]*?)\]\)/)[1]
+  .matchAll(/"([^"]+)"/g)]
+  .map((m) => m[1].replace(/\$\{var\.region\}/g, "eu-central-1"))
+  .join("; ");
 const TYPES = { ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".html": "text/html", ".jpg": "image/jpeg" };
 const fold = (text) => String(text || "").toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
 
@@ -247,7 +255,8 @@ async function openInventory(t, { signedIn = true, lang = "en", totp = false, re
     const page = url.pathname === "/" || url.pathname.startsWith("/box") ? "index.html" : path.normalize(url.pathname);
     const file = path.join(WEB, page);
     if (!file.startsWith(WEB) || !fs.existsSync(file)) return reply(404, "text/plain", "not found");
-    return reply(200, TYPES[path.extname(file)] || "application/octet-stream", fs.readFileSync(file));
+    const headers = path.extname(file) === ".html" ? { "Content-Security-Policy": CSP } : {};
+    return request.respond({ status: 200, contentType: TYPES[path.extname(file)] || "application/octet-stream", headers, body: fs.readFileSync(file) });
   });
   await page.evaluateOnNewDocument((lang, signedIn, totp) => {
     if (sessionStorage.getItem("test-ready")) return;
@@ -526,7 +535,7 @@ test("recognition settings stay hidden while recognition is off", async (t) => {
   if (!off) return;
   await openSettings(off.page, "Password");
   const tabs = await off.page.$$eval(".dialog [role=tab]", (nodes) => nodes.map((node) => node.textContent));
-  assert.deepEqual(tabs, ["Password", "Two-step sign-in", "Language", "Users"]);
+  assert.deepEqual(tabs, ["Password", "Two-step sign-in", "Language", "Labels", "Users"]);
   assert.equal(off.api.routes("GET /settings").length, 0);
 });
 
@@ -536,6 +545,109 @@ test("recognition settings show when it is on", async (t) => {
   await openSettings(on.page, "Recognition");
   await on.page.waitForSelector(".settings-body input[type=password]");
   assert.equal(on.api.routes("GET /settings").length, 1);
+});
+
+test("labels: pick boxes and print A4 sheets of 30 × 50 mm", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.evaluate(() => { window.print = () => { window.printed = (window.printed || 0) + 1; }; });
+  await openSettings(page, "Labels");
+  await page.waitForSelector(".label-choice .check");
+  assert.equal((await page.$$(".label-choice .check")).length, 7);
+  await clickText(page, ".settings-body button", "Clear all");
+  assert.equal(await page.$eval(".settings-body button.primary", (node) => node.disabled), true);
+  await page.click(".label-choice .check:nth-child(1) input");
+  await page.click(".label-choice .check:nth-child(7) input");
+  assert.equal(await text(page, ".settings-body button.primary"), "Print: 2");
+  await page.click(".settings-body button.primary");
+  assert.equal(await page.evaluate(() => window.printed), 1);
+  const labels = await page.$$eval(".print-labels .label", (nodes) => nodes.map((node) => ({
+    number: node.querySelector(".label-number").textContent,
+    qr: node.querySelector("svg.qr path").getAttribute("d").length > 500,
+  })));
+  assert.deepEqual(labels, [{ number: "1", qr: true }, { number: "A-7", qr: true }]);
+
+  // On paper: one A4 page, labels 30 mm wide and 50 mm tall; the app is hidden.
+  await page.emulateMediaType("print");
+  const sizes = await page.evaluate(() => {
+    const mm = (px) => Math.round((px * 25.4) / 96 * 10) / 10;
+    const box = document.querySelector(".print-labels .label").getBoundingClientRect();
+    return { width: mm(box.width), height: mm(box.height), app: getComputedStyle(document.getElementById("root")).display };
+  });
+  assert.deepEqual(sizes, { width: 30, height: 50, app: "none" });
+  if (process.env.LABEL_PDF) await page.pdf({ path: process.env.LABEL_PDF, preferCSSPageSize: true, printBackground: true });
+});
+
+test("labels: size, font and text are chosen and kept", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.evaluate(() => { window.print = () => {}; });
+  await openSettings(page, "Labels");
+  await page.waitForSelector(".label-preview .label");
+  assert.equal(await text(page, ".label-settings .hint"), "On an A4 sheet: 6 × 5 = 30");
+  assert.equal(await text(page, ".label-preview .label-number"), "1");
+  assert.equal(await page.$(".label-preview .label-name"), null, "no name by default");
+
+  const [width, height] = await page.$$(".label-settings .label-size:first-child input");
+  await width.click({ clickCount: 3 });
+  await width.type("50");
+  await height.click({ clickCount: 3 });
+  await height.type("30");
+  await page.select(".label-settings select", "serif");
+  await clickText(page, ".label-show label", "Name");
+  assert.equal(await text(page, ".label-settings .hint"), "On an A4 sheet: 4 × 9 = 36");
+  assert.equal(await text(page, ".label-preview .label-name"), "Electronics: Raspberry Pi kit");
+  assert.ok(await page.$(".label-preview .label.wide"), "a wide label puts the text beside the code");
+
+  await page.reload();
+  await openSettings(page, "Labels");
+  await page.waitForSelector(".label-preview .label");
+  assert.deepEqual(await page.$$eval(".label-settings .label-size:first-child input", (nodes) => nodes.map((node) => node.value)), ["50", "30"], "kept in the browser");
+  assert.equal(await page.$eval(".label-settings select", (node) => node.value), "serif");
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.click(".settings-body button.primary");
+  await page.emulateMediaType("print");
+  const label = await page.evaluate(() => {
+    const mm = (px) => Math.round((px * 25.4) / 96);
+    const node = document.querySelector(".print-labels .label");
+    const box = node.getBoundingClientRect();
+    const number = node.querySelector(".label-number");
+    return { width: mm(box.width), height: mm(box.height), number: mm(parseFloat(getComputedStyle(number).fontSize)) };
+  });
+  assert.deepEqual([label.width, label.height], [50, 30]);
+  assert.ok(label.number >= 5, "the number is as large as fits: " + label.number + " mm");
+});
+
+test("labels: the QR code leaves white to cut along, sizes can be set", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.evaluate(() => { window.print = () => {}; });
+  await openSettings(page, "Labels");
+  await page.waitForSelector(".label-preview .label");
+  const printed = async () => {
+    await page.click(".settings-body button.primary");
+    await page.emulateMediaType("print");
+    const sizes = await page.evaluate(() => {
+      const mm = (px) => Math.round((px * 25.4) / 96 * 10) / 10;
+      const label = document.querySelector(".print-labels .label").getBoundingClientRect();
+      const qr = document.querySelector(".print-labels .label svg.qr").getBoundingClientRect();
+      const number = document.querySelector(".print-labels .label-number");
+      return { qr: mm(qr.width), left: mm(qr.left - label.left), top: mm(qr.top - label.top), number: mm(parseFloat(getComputedStyle(number).fontSize)) };
+    });
+    await page.emulateMediaType("screen");
+    return sizes;
+  };
+  const auto = await printed();
+  assert.deepEqual([auto.qr, auto.left, auto.top], [24, 3, 3], "80% of 30 mm, the same white above as beside");
+
+  const [qr, font] = await page.$$(".label-settings .label-size:nth-of-type(2) input");
+  await qr.type("18");
+  await font.type("8");
+  const chosen = await printed();
+  assert.deepEqual([chosen.qr, chosen.number], [18, 8]);
 });
 
 test("users: invite without mail, 2FA status and reset", async (t) => {
