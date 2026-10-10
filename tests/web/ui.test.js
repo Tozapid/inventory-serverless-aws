@@ -138,7 +138,11 @@ function fakeApi() {
           items.push({ ...card(box), history_match: true });
         }
       }
+      // By number unless asked otherwise, as the API does; the example boxes are
+      // already in that order. The name is the first line of the description.
       const sort = url.searchParams.get("sort");
+      const name = (item) => fold((String(item.description).split("\n").find((line) => line.trim()) || "").replace(/[#*_`]/g, ""));
+      if (sort === "name") items.sort((a, b) => name(a).localeCompare(name(b)));
       if (sort === "updated") items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       if (sort === "created") items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return [200, { items, next_cursor: null, urls_expire_at: "2026-09-01T11:00:00Z" }];
@@ -388,14 +392,20 @@ test("an admin switches to everyone's recognition log", async (t) => {
   await until(async () => (await page.$$(".recognition-log .log-entry")).length === 2, "back to own log");
 });
 
-test("sorting is by number first, and the choice is kept", async (t) => {
+test("sorting is by index first, and the choice is kept", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
   const { page, api } = wiki;
   await page.waitForSelector(".box-row");
   assert.equal(await page.$eval(".sort-select", (node) => node.value), "number");
+  assert.deepEqual(await page.$$eval(".sort-select option", (nodes) => nodes.map((node) => node.textContent)),
+    ["By index", "By name", "Recently changed first", "Newest first"]);
   assert.deepEqual(await rowNumbers(page), ["1", "2", "3", "4", "5", "12", "A-7"]);
   assert.equal(api.routes("GET /boxes").at(-1).query.sort, undefined);
+
+  await page.select(".sort-select", "name");
+  await until(async () => (await rowNumbers(page))[0] === "12", "by name: Cables and chargers first");
+  assert.equal(api.routes("GET /boxes").at(-1).query.sort, "name");
 
   await page.select(".sort-select", "created");
   await until(async () => (await rowNumbers(page))[0] === "A-7", "newest first");

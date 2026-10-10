@@ -636,11 +636,12 @@ class SortTest(unittest.TestCase):
         rows = []
         # Box 1: oldest, changed last. Box 2: no created_at, history says when.
         # Box 3: no created_at and no history. Box 10: newest.
-        for number, created, updated in (("1", "2026-01-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"),
-                                         ("2", None, "2026-03-01T00:00:00.000Z"),
-                                         ("3", None, "2026-05-01T00:00:00.000Z"),
-                                         ("10", "2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z")):
-            row = dict(meta(number, "Кабели " + number), updated_at=updated)
+        # Names: box 10 has none, so it goes last.
+        for number, created, updated, name in (("1", "2026-01-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z", "## Ёлочные **игрушки**"),
+                                               ("2", None, "2026-03-01T00:00:00.000Z", "Инструменты"),
+                                               ("3", None, "2026-05-01T00:00:00.000Z", "елка искусственная\nв чехле"),
+                                               ("10", "2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z", "")):
+            row = dict(meta(number, "Кабели " + number), updated_at=updated, description=name)
             if created:
                 row["created_at"] = created
             rows.append(row)
@@ -659,6 +660,23 @@ class SortTest(unittest.TestCase):
     def test_number_is_the_default(self):
         self.assertEqual(self.numbers()[0], ["1", "2", "3", "10"])
         self.assertEqual(self.numbers(sort="nonsense")[0], ["1", "2", "3", "10"])
+        self.assertEqual(self.numbers(sort="number")[0], ["1", "2", "3", "10"])
+
+    def test_by_name(self):
+        # "елка искусственная" before "Ёлочные игрушки": case and ё do not count.
+        self.assertEqual(self.numbers(sort="name")[0], ["3", "1", "2", "10"])
+
+    def test_numbers_with_letters_sort_naturally(self):
+        for number in ("A-10", "A-9", "12a", "B-1"):
+            self.table.put_item(dict(meta(number, ""), updated_at="2026-01-01T00:00:00.000Z"))
+        self.assertEqual(self.numbers()[0], ["1", "2", "3", "10", "12a", "A-9", "A-10", "B-1"])
+        first, cursor = self.numbers(limit="5")
+        rest, end = self.numbers(limit="5", cursor=cursor)
+        self.assertEqual((first + rest, end), (["1", "2", "3", "10", "12a", "A-9", "A-10", "B-1"], None))
+
+    def test_plain_title_matches_the_page(self):
+        self.assertEqual(lambda_app.plain_title("\n## Electronics: **Raspberry Pi** [kit](https://x)\nmore"), "Electronics: Raspberry Pi kit")
+        self.assertEqual(lambda_app.plain_title(None), "")
 
     def test_last_changed_first(self):
         self.assertEqual(self.numbers(sort="updated")[0], ["1", "10", "3", "2"])

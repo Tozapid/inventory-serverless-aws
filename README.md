@@ -16,7 +16,7 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 
 - Boxes with a number (`12`, `A-7`), a description and contents in Markdown; a card per box at `/box/<number>` that can be shared, reloaded or opened in a new tab.
 - Search across number, description and contents, every word has to match; `ё` counts as `е`, accented words stay whole.
-- The list is sorted by number, or with the recently changed or the newest boxes first; the choice is remembered in the browser.
+- The list is sorted by index (the box number from `/box/<index>`, with `A-9` before `A-10`), by name (the first line of the description), or with the recently changed or the newest boxes first; the choice is remembered in the browser.
 - Photos: pick a file (on a phone the picker also offers the camera) or paste with ⌘V / Ctrl+V. The browser keeps a 2560 px JPEG for viewing and a 1280 px one for the list; a portrait photo is turned to lie horizontally, and ↺ ↻ turn a saved one while editing the card. A photo gallery view and a full-screen viewer.
 - History of every change of the contents and of the photo description written by recognition: before, after, who and an optional comment. Administrators can delete single entries.
 - Search in the history, off by default: with the "in history" box ticked, search also finds a box by what it used to hold or what its earlier photos showed, and marks such a box "found in history".

@@ -4,9 +4,9 @@
   const t = I18n.t;
   const root = document.getElementById("root");
   // The chosen order stays in this browser. Storage may be off (a private
-  // window), and then the list simply starts by number.
+  // window), and then the list simply starts by number (the box address).
   const SORT_KEY = "inventory-sort";
-  const SORTS = ["number", "updated", "created"];
+  const SORTS = ["number", "name", "updated", "created"];
   const state = {
     email: "",
     mode: "list",
@@ -622,7 +622,8 @@
         "aria-label": t("Сортировка"),
         onchange: (event) => setSort(event.target.value),
       }, [
-        ["number", t("По номеру")],
+        ["number", t("По индексу")],
+        ["name", t("По имени")],
         ["updated", t("Сначала изменённые")],
         ["created", t("Сначала новые")],
       ].map(([value, label]) => el("option", { value, selected: state.sort === value ? "selected" : null }, label))),
