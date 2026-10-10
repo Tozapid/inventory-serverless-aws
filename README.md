@@ -16,8 +16,8 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 
 - Boxes with a number (`12`, `A-7`), a description and contents in Markdown; a card per box at `/box/<number>` that can be shared, reloaded or opened in a new tab.
 - Search across number, description and contents, every word has to match; `ё` counts as `е`, accented words stay whole.
-- Photos: pick a file (on a phone the picker also offers the camera) or paste with ⌘V / Ctrl+V. The browser keeps a 2560 px JPEG for viewing and a 1280 px one for the list; a photo gallery view and a full-screen viewer.
-- History of every change of the contents and of the photo description written by recognition: before, after, who and an optional comment.
+- Photos: pick a file (on a phone the picker also offers the camera) or paste with ⌘V / Ctrl+V. The browser keeps a 2560 px JPEG for viewing and a 1280 px one for the list; a portrait photo is turned to lie horizontally, and ↺ ↻ turn a saved one while editing the card. A photo gallery view and a full-screen viewer.
+- History of every change of the contents and of the photo description written by recognition: before, after, who and an optional comment. Administrators can delete single entries.
 - Search in the history, off by default: with the "in history" box ticked, search also finds a box by what it used to hold or what its earlier photos showed, and marks such a box "found in history".
 - Optional photo recognition: with a user's own Grok API key the photo is described into hidden text that search uses.
 - Optional two-step sign-in with an authenticator app (TOTP), turned on, switched to another app or off in the settings by each user.
@@ -129,7 +129,9 @@ A custom domain needs an ACM certificate in `us-east-1` and an alias on the dist
 
 With `recognition = true`, the settings get a Recognition tab where each user stores their own xAI Grok API key and model. After a photo is saved, the API calls itself asynchronously, sends the 1280 px copy to Grok and stores the description as hidden text: it is searchable but not shown on the card unless asked for. The description is written in the language of whoever uploaded the photo. Each new description, and the old one going away with a replaced photo, is written to the history of the box.
 
-It is off in the public demo for a reason: everybody signs in as the same administrator, so a key saved there could be read by the next visitor. The example boxes carry hidden text of their own, so searching for `baubles` or `pliers` still shows what recognition does.
+The key is write-only: the page only learns that a key is saved and its last four characters. Below the key, the tab shows the user's recognition log: the last 50 attempts over 30 days, with what Grok answered when it failed. Administrators can switch it to everyone's attempts.
+
+It is off in the public demo for a reason: everybody signs in as the same administrator, so a key saved there would be spent by the next visitor; the key cannot be read back, but anyone signed in as that admin can upload photos on it. The example boxes carry hidden text of their own, so searching for `baubles` or `pliers` still shows what recognition does.
 
 ## Repository layout
 

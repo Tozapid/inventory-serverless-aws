@@ -116,7 +116,7 @@ function fakeApi() {
   });
   seed.forEach((box) => {
     boxes.set(box.number, box);
-    history.set(box.number, box.history.map((entry) => ({ at: "2026-09-01T10:00:00Z", by: ADMIN.email, field: "contents", before: entry.before, after: entry.after, note: entry.note })).reverse());
+    history.set(box.number, box.history.map((entry, index) => ({ id: "2026-09-01T10:00:00.000Z#0000000" + index, at: "2026-09-01T10:00:00Z", by: ADMIN.email, field: "contents", before: entry.before, after: entry.after, note: entry.note })).reverse());
   });
 
   function handle(method, url, body) {
@@ -124,6 +124,7 @@ function fakeApi() {
     calls.push({ route, query: Object.fromEntries(url.searchParams), body });
     const one = /^\/boxes\/([^/]+)$/.exec(url.pathname.replace(/^\/api/, ""));
     const hist = /^\/boxes\/([^/]+)\/history$/.exec(url.pathname.replace(/^\/api/, ""));
+    const histEntry = /^\/boxes\/([^/]+)\/history\/([^/]+)$/.exec(url.pathname.replace(/^\/api/, ""));
     if (route === "GET /boxes") {
       const words = fold(url.searchParams.get("q")).split(" ").filter(Boolean);
       const matches = (parts) => words.every((word) => fold(parts.join(" ")).includes(word));
@@ -143,6 +144,11 @@ function fakeApi() {
       history.set(box.number, body.contents ? [{ at: "2026-09-02T10:00:00Z", by: ADMIN.email, before: "", after: body.contents, note: "Создание коробки" }] : []);
       return [201, card(box)];
     }
+    if (method === "DELETE" && histEntry) {
+      const [number, id] = [decodeURIComponent(histEntry[1]), decodeURIComponent(histEntry[2])];
+      history.set(number, (history.get(number) || []).filter((entry) => entry.id !== id));
+      return [200, { deleted: id }];
+    }
     if (method === "GET" && hist) return [200, { items: history.get(decodeURIComponent(hist[1])) || [] }];
     if (method === "GET" && one) {
       const box = boxes.get(decodeURIComponent(one[1]));
@@ -150,7 +156,16 @@ function fakeApi() {
     }
     switch (route) {
       case "GET /settings":
-        return [200, { recognition: false, grok_api_key: "", grok_model: "" }];
+        return [200, { recognition: false, grok_key_set: false, grok_key_hint: "", grok_model: "" }];
+      case "GET /settings/recognition-log":
+        return [200, { items: [
+          { at: "2026-10-10T10:00:00Z", user: ADMIN.email, number: "2", status: "error", message: "The recognition service did not accept the photo", detail: "HTTP 400: {\"error\": \"Model not found\"}", model: "grok-4.7", duration_ms: 1234, chars: 0 },
+          { at: "2026-10-10T09:00:00Z", user: ADMIN.email, number: "1", status: "ok", message: "", detail: "", model: "grok-4.7", duration_ms: 5100, chars: 120 },
+        ] }];
+      case "GET /admin/recognition-log":
+        return [200, { items: [
+          { at: "2026-10-10T11:00:00Z", user: "guest@example.com", number: "3", status: "lost", message: "Recognition did not finish", detail: "", model: "grok-4.7", duration_ms: 0, chars: 0 },
+        ] }];
       case "GET /me":
         return [200, { email: ADMIN.email, admin: true }];
       case "GET /admin/users":
@@ -311,6 +326,55 @@ test("search looks through the history only when asked", async (t) => {
   await until(async () => JSON.stringify(await rowNumbers(page)) === JSON.stringify(["1"]), "the box whose history mentions it");
   assert.equal(api.routes("GET /boxes").at(-1).query.history, "1");
   assert.equal(await text(page, ".box-row .history-match"), "found in history");
+});
+
+test("an admin deletes a history entry", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/1" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".history .event");
+  assert.equal((await page.$$(".history .event")).length, 2);
+  await page.click(".history .event .event-head button");
+  await until(async () => (await page.$$(".history .event")).length === 1, "entry removed");
+  assert.equal(api.calls.filter((call) => call.route.startsWith("DELETE /boxes/1/history/")).length, 1);
+  assert.match(await text(page, ".history"), /Box created/, "the older entry stays");
+  await page.reload();
+  await page.waitForSelector(".history .event");
+  assert.equal((await page.$$(".history .event")).length, 1);
+});
+
+test("the recognition log shows what Grok answered", async (t) => {
+  const wiki = await openInventory(t, { recognition: true });
+  if (!wiki) return;
+  const { page } = wiki;
+  await openSettings(page, "Recognition");
+  await page.waitForSelector(".recognition-log .log-entry");
+  const rows = await page.$$eval(".recognition-log .log-entry", (nodes) => nodes.map((node) => node.textContent));
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], /Error/);
+  assert.match(rows[0], /did not accept the photo/);
+  assert.match(rows[0], /grok-4\.7 · 1\.2 s/);
+  assert.match(rows[1], /Done/);
+  assert.match(rows[1], /120 characters/);
+  assert.match(await text(page, ".recognition-log pre"), /Model not found/);
+  await page.click(".recognition-log a.plate");
+  await page.waitForFunction(() => !document.querySelector(".dialog-wrap") && location.pathname === "/box/2");
+});
+
+test("an admin switches to everyone's recognition log", async (t) => {
+  const wiki = await openInventory(t, { recognition: true });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await openSettings(page, "Recognition");
+  await page.waitForSelector(".recognition-log .log-entry");
+  await clickText(page, ".log-scope button", "All users");
+  await until(async () => (await page.$$(".recognition-log .log-entry")).length === 1, "everyone's log");
+  const row = await text(page, ".recognition-log .log-entry");
+  assert.match(row, /Did not finish/);
+  assert.match(row, /guest@example\.com/);
+  assert.equal(api.routes("GET /admin/recognition-log").length, 1);
+  await clickText(page, ".log-scope button", "Mine");
+  await until(async () => (await page.$$(".recognition-log .log-entry")).length === 2, "back to own log");
 });
 
 test("a new box is created and opened", async (t) => {

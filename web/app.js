@@ -157,16 +157,28 @@
     return null;
   }
 
-  async function encodeJpeg(file, maxEdge, quality) {
+  // A portrait photo is turned this way to lie horizontally. The turn buttons
+  // on the card fix the direction when it is wrong.
+  const PORTRAIT_TURN = 90;
+
+  // turn: degrees clockwise, a multiple of 90, or "auto" to lay a portrait
+  // photo horizontally. The browser has already applied the EXIF orientation.
+  async function encodeJpeg(file, maxEdge, quality, turn) {
     const bitmap = await createImageBitmap(file);
+    if (turn === "auto") turn = bitmap.height > bitmap.width ? PORTRAIT_TURN : 0;
+    const sideways = Math.abs(turn) % 180 === 90;
     const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.width = sideways ? height : width;
+    canvas.height = sideways ? width : height;
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((turn * Math.PI) / 180);
+    ctx.drawImage(bitmap, -width / 2, -height / 2, width, height);
     if (bitmap.close) bitmap.close();
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
     if (!blob) throw new Error(t("Не удалось подготовить фотографию"));
@@ -270,14 +282,14 @@
 
   let photoBusy = false;
 
-  async function saveCardPhoto(file) {
+  async function saveCardPhoto(file, turn) {
     const number = state.selected;
     if (!number || photoBusy) return;
     const status = document.querySelector("#detail .photo-status");
     photoBusy = true;
     if (status) status.textContent = t("Сохраняю фотографию…");
     try {
-      const saved = await uploadPhoto(number, file);
+      const saved = await uploadPhoto(number, file, turn);
       if (state.selected !== number) return;
       if (state.detail && state.detail.number === saved.number) {
         state.detail.photo_url = saved.photo_url;
@@ -286,7 +298,7 @@
         state.detail.version = saved.version;
         state.detail.updated_at = saved.updated_at;
         state.detail.updated_by = saved.updated_by;
-        state.detail.hidden_text = "";
+        state.detail.hidden_text = saved.hidden_text || "";
       }
       const frame = document.querySelector("#detail .frame");
       if (frame && saved.photo_url) {
@@ -316,12 +328,30 @@
     }
   }
 
-  async function uploadPhoto(number, file) {
+  // A new photo is laid horizontally; a turned one keeps its description.
+  // The saved photo is read back through /media, turned and saved again.
+  async function turnCardPhoto(turn) {
+    const card = state.detail;
+    if (!card || !card.photo_url || photoBusy) return;
+    const status = document.querySelector("#detail .photo-status");
+    if (status) status.textContent = t("Поворачиваю фотографию…");
+    try {
+      const reply = await fetch(card.photo_url, { credentials: "same-origin" });
+      if (!reply.ok) throw new Error(t("Не удалось подготовить фотографию"));
+      const blob = await reply.blob();
+      await saveCardPhoto(new File([blob], "photo.jpg", { type: "image/jpeg" }), turn);
+    } catch (error) {
+      if (status) status.textContent = error.message;
+      toast(error.message);
+    }
+  }
+
+  async function uploadPhoto(number, file, turn) {
     const kind = imageKind(file);
     if (!kind) throw new Error(t("Нужна фотография JPEG, PNG или WebP"));
     if (file.size > 40 * 1024 * 1024) throw new Error(t("Файл больше 40 МБ"));
-    const view = await encodeJpeg(file, 2560, 0.82);
-    const thumb = await encodeJpeg(file, 1280, 0.8);
+    const view = await encodeJpeg(file, 2560, 0.82, turn === undefined ? "auto" : turn);
+    const thumb = await encodeJpeg(file, 1280, 0.8, turn === undefined ? "auto" : turn);
     const signed = await api("/boxes/" + encodeURIComponent(number) + "/photo", {
       method: "POST",
       body: { content_type: "image/jpeg" },
@@ -330,7 +360,7 @@
     await postFile(signed.thumb, new File([thumb], "thumb.jpg", { type: "image/jpeg" }));
     return api("/boxes/" + encodeURIComponent(number) + "/photo/complete", {
       method: "POST",
-      body: { original_key: signed.original.key, thumb_key: signed.thumb.key },
+      body: { original_key: signed.original.key, thumb_key: signed.thumb.key, keep_description: turn !== undefined },
     });
   }
 
@@ -908,8 +938,22 @@
         },
       }, t("Вставить и сохранить")),
       el("label", { class: "ghost file-label" }, [t("Файл"), fileInput]),
+      card.photo_url ? el("button", {
+        class: "ghost",
+        type: "button",
+        title: t("Повернуть против часовой стрелки"),
+        "aria-label": t("Повернуть против часовой стрелки"),
+        onclick: () => turnCardPhoto(-90),
+      }, "↺") : null,
+      card.photo_url ? el("button", {
+        class: "ghost",
+        type: "button",
+        title: t("Повернуть по часовой стрелке"),
+        "aria-label": t("Повернуть по часовой стрелке"),
+        onclick: () => turnCardPhoto(90),
+      }, "↻") : null,
       el("span", { class: "photo-status muted small" }, t("⌘V тоже сохраняет фотографию сразу")),
-    ]);
+    ].filter(Boolean));
     if (!state.editing) {
       const description = String(card.description || "");
       const formattedDescription = description.trim() && description.trim() !== plainTitle(description)
@@ -1168,10 +1212,32 @@
     return note === "Создание коробки" ? t("Создание коробки") : note;
   }
 
+  // Only administrators see the button; the API checks it again. The entry is
+  // removed in place, so a card being edited keeps what was typed.
+  async function deleteHistoryEntry(item, node) {
+    const number = state.selected;
+    if (!number || !window.confirm(t("Удалить эту запись из истории? Вернуть её будет нельзя."))) return;
+    try {
+      await api("/boxes/" + encodeURIComponent(number) + "/history/" + encodeURIComponent(item.id), { method: "DELETE" });
+    } catch (error) {
+      toast(error.message);
+      return;
+    }
+    if (state.selected !== number) return;
+    state.history = state.history.filter((entry) => entry.id !== item.id);
+    if (node) node.remove();
+    toast(t("Запись удалена из истории"));
+  }
+
   function renderHistory() {
     if (!state.history.length) return el("p", { class: "muted small" }, t("Изменений ещё не было."));
     return el("div", { class: "history" }, state.history.map((item) => el("article", { class: "event" }, [
-      el("strong", {}, formatWhen(item.at)),
+      el("div", { class: "event-head" }, [
+        el("strong", {}, formatWhen(item.at)),
+        state.admin && item.id
+          ? el("button", { class: "ghost tiny", type: "button", onclick: (event) => deleteHistoryEntry(item, event.currentTarget.closest(".event")) }, t("Удалить"))
+          : null,
+      ]),
       el("span", { class: "muted small" }, [
         item.field === "hidden_text" ? t("Описание фото") : t("Содержимое"),
         " · ",
@@ -1423,34 +1489,143 @@
 
   // Photo recognition: each user keeps their own Grok key and model.
   async function recognitionSection(body, wrap) {
-    let settings = { grok_api_key: "", grok_model: "grok-4.7" };
+    let settings = { grok_key_set: false, grok_key_hint: "", grok_model: "grok-4.7" };
     try {
       settings = Object.assign(settings, await api("/settings"));
     } catch (loadError) {
       toast(loadError.message);
     }
-    const apiKey = el("input", { type: "password", autocomplete: "off", value: settings.grok_api_key || "" });
+    // The API never returns the saved key: the field stays empty, and an empty
+    // field keeps the saved key.
+    const apiKey = el("input", {
+      type: "password",
+      autocomplete: "new-password",
+      placeholder: settings.grok_key_set ? t("Введите новый, чтобы заменить") : "",
+    });
     const model = el("input", { type: "text", autocomplete: "off", value: settings.grok_model || "grok-4.7", placeholder: "grok-4.7" });
     const error = el("p", { class: "error", role: "alert" });
+    const save = async (extra) => {
+      error.textContent = "";
+      try {
+        await api("/settings", { method: "PUT", body: Object.assign({ grok_api_key: apiKey.value.trim(), grok_model: model.value.trim() || "grok-4.7" }, extra) });
+        wrap.remove();
+        toast(t("Настройки сохранены"));
+      } catch (saveError) {
+        error.textContent = saveError.message;
+      }
+    };
+    const keyState = !settings.grok_key_set
+      ? t("Ключ не сохранён.")
+      : settings.grok_key_hint
+        ? t("Ключ сохранён, заканчивается на {hint}. Посмотреть его нельзя.", { hint: settings.grok_key_hint })
+        : t("Ключ сохранён. Посмотреть его нельзя.");
     body.append(el("form", {
-      onsubmit: async (event) => {
+      onsubmit: (event) => {
         event.preventDefault();
-        error.textContent = "";
-        try {
-          await api("/settings", { method: "PUT", body: { grok_api_key: apiKey.value.trim(), grok_model: model.value.trim() || "grok-4.7" } });
-          wrap.remove();
-          toast(t("Настройки сохранены"));
-        } catch (saveError) {
-          error.textContent = saveError.message;
-        }
+        save({});
       },
     }, [
       el("p", { class: "hint" }, t("Ключ и модель хранятся в вашей учётной записи. По снимку сервис записывает скрытый текст и ищет по нему. В карточке этот текст не показывается.")),
       el("label", {}, [t("API-ключ Grok"), apiKey]),
+      el("p", { class: "hint" }, keyState),
       el("label", {}, [t("Модель"), model]),
-      el("div", { class: "dialog-actions" }, [el("button", { type: "submit", class: "primary" }, t("Сохранить"))]),
+      el("div", { class: "dialog-actions" }, [
+        settings.grok_key_set
+          ? el("button", {
+            type: "button",
+            class: "danger",
+            onclick: () => {
+              if (window.confirm(t("Удалить сохранённый ключ Grok?"))) save({ grok_api_key: "", remove_key: true });
+            },
+          }, t("Удалить ключ"))
+          : null,
+        el("button", { type: "submit", class: "primary" }, t("Сохранить")),
+      ].filter(Boolean)),
       error,
     ]));
+    // Administrators can switch to everyone's attempts.
+    let everyone = false;
+    const log = el("div", { class: "recognition-log" });
+    const hint = el("p", { class: "hint" });
+    const scope = el("div", { class: "log-scope" });
+    const show = () => {
+      hint.textContent = everyone
+        ? t("Последние попытки распознавания всех пользователей за 30 дней.")
+        : t("Ваши последние попытки распознавания за 30 дней: что ответил Grok и почему описание не появилось.");
+      scope.replaceChildren(...[[false, t("Мои")], [true, t("Все пользователи")]].map(([value, label]) => el("button", {
+        type: "button",
+        class: "ghost tiny" + (everyone === value ? " active" : ""),
+        "aria-pressed": String(everyone === value),
+        onclick: () => {
+          everyone = value;
+          show();
+        },
+      }, label)));
+      loadRecognitionLog(log, wrap, everyone);
+    };
+    body.append(
+      el("div", { class: "log-head" }, [
+        el("h3", {}, t("Журнал распознавания")),
+        state.admin ? scope : null,
+        el("button", { type: "button", class: "ghost tiny", onclick: () => loadRecognitionLog(log, wrap, everyone) }, t("Обновить")),
+      ]),
+      hint,
+      log,
+    );
+    show();
+  }
+
+  // The language is fixed for the life of the page: switching reloads it.
+  const LOG_STATUS = {
+    ok: ["ok", t("Готово")],
+    error: ["bad", t("Ошибка")],
+    skipped: ["", t("Пропущено")],
+    running: ["", t("Идёт")],
+    lost: ["bad", t("Не завершилось")],
+  };
+
+  async function loadRecognitionLog(node, wrap, everyone) {
+    node.dataset.scope = String(everyone);
+    node.replaceChildren(el("p", { class: "muted small" }, t("Загрузка…")));
+    let items;
+    try {
+      items = (await api(everyone ? "/admin/recognition-log" : "/settings/recognition-log")).items || [];
+    } catch (error) {
+      if (node.dataset.scope === String(everyone)) node.replaceChildren(el("p", { class: "error" }, error.message));
+      return;
+    }
+    // A slow answer for the other scope must not overwrite the one shown now.
+    if (node.dataset.scope !== String(everyone)) return;
+    if (!items.length) {
+      node.replaceChildren(el("p", { class: "muted small" }, t("Попыток распознавания пока не было.")));
+      return;
+    }
+    node.replaceChildren(...items.map((item) => {
+      const [tone, label] = LOG_STATUS[item.status] || ["", item.status];
+      const facts = [
+        item.model,
+        item.duration_ms ? t("{seconds} с", { seconds: (item.duration_ms / 1000).toFixed(1) }) : "",
+        item.chars ? t("{count} символов", { count: item.chars }) : "",
+      ].filter(Boolean).join(" · ");
+      return el("article", { class: "log-entry" }, [
+        el("div", { class: "log-line" }, [
+          el("span", { class: "log-status " + tone }, label),
+          el("a", {
+            class: "plate",
+            href: boxPath(item.number),
+            onclick: (event) => followLink(event, () => {
+              wrap.remove();
+              openBox(item.number);
+            }),
+          }, item.number),
+          el("span", { class: "muted small" }, formatWhen(item.at)),
+          everyone ? el("span", { class: "muted small" }, item.user) : null,
+        ]),
+        item.message ? el("p", { class: "small" }, item.message) : null,
+        facts ? el("p", { class: "muted small" }, facts) : null,
+        item.detail ? el("details", {}, [el("summary", { class: "small" }, t("Подробности")), el("pre", { class: "log-detail" }, item.detail)]) : null,
+      ]);
+    }));
   }
 
   async function totpSection(body) {

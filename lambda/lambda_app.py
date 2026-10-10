@@ -43,10 +43,12 @@ SHA1_DIGEST_INFO = bytes.fromhex("3021300906052b0e03021a05000414")
 
 
 class ApiError(Exception):
-    def __init__(self, status, message, **values):
+    # detail is technical text for the recognition log, never shown as the error.
+    def __init__(self, status, message, detail="", **values):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.detail = detail
         self.values = values
 
 
@@ -93,6 +95,8 @@ def route(method, parts, event):
         return get_settings(event)
     if parts == ["settings"] and method == "PUT":
         return put_settings(event)
+    if parts == ["settings", "recognition-log"] and method == "GET":
+        return get_recognition_log(event)
     if parts == ["boxes"] and method == "GET":
         return list_boxes(event)
     if parts == ["boxes"] and method == "POST":
@@ -105,6 +109,8 @@ def route(method, parts, event):
         return delete_box(parts[1])
     if len(parts) == 3 and parts[0] == "boxes" and parts[2] == "history" and method == "GET":
         return get_history(parts[1])
+    if len(parts) == 4 and parts[0] == "boxes" and parts[2] == "history" and method == "DELETE":
+        return delete_history_entry(parts[1], parts[3], event)
     if len(parts) == 3 and parts[0] == "boxes" and parts[2] == "photo" and method == "POST":
         return presign_photo(parts[1], event)
     if len(parts) == 4 and parts[0] == "boxes" and parts[2] == "photo" and parts[3] == "complete" and method == "POST":
@@ -329,6 +335,7 @@ def get_history(number):
         Limit=100,
     )
     items = [{
+        "id": item["sk"].removeprefix("HIST#"),
         "at": item.get("changed_at"),
         "by": item.get("changed_by") or "",
         "field": item.get("field") or "contents",
@@ -337,6 +344,29 @@ def get_history(number):
         "note": item.get("note") or "",
     } for item in resp.get("Items", [])]
     return response(200, {"items": items})
+
+
+HISTORY_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T[0-9:.]{8,16}Z#[0-9a-f]{8}$")
+
+
+# History is the record of who changed what, so only administrators remove
+# entries from it. The card itself stays as it is.
+def delete_history_entry(number, entry_id, event):
+    if not is_admin(event):
+        raise ApiError(403, "Нужны права администратора")
+    number = validate_number(number)
+    if not HISTORY_ID_RE.fullmatch(entry_id or ""):
+        raise ApiError(400, "Некорректная запись истории")
+    try:
+        table().delete_item(
+            Key={"pk": box_pk(number), "sk": "HIST#" + entry_id},
+            ConditionExpression="attribute_exists(pk)",
+        )
+    except Exception as exc:
+        if conditional_failed(exc):
+            raise ApiError(404, "Такой записи в истории нет") from exc
+        raise
+    return response(200, {"deleted": entry_id})
 
 
 def presign_photo(number, event):
@@ -370,13 +400,17 @@ def complete_photo(number, event):
     now = now_iso()
     version = as_int(current.get("version"), 1)
     who = actor(event)
-    pending = recognition_configured(who)
+    # A turned photo shows the same things, so it keeps its description and is
+    # not sent to recognition again.
+    keep = bool(payload.get("keep_description"))
+    hidden = (current.get("hidden_text") or "") if keep else ""
+    pending = not keep and recognition_configured(who)
     values = {
         ":p": original_key,
         ":t": thumb_key,
         ":c": head.get("ContentType") or "image/jpeg",
-        ":s": build_search(number, current.get("description") or "", current.get("contents") or "", ""),
-        ":h": "",
+        ":s": build_search(number, current.get("description") or "", current.get("contents") or "", hidden),
+        ":h": hidden,
         ":u": now,
         ":b": who,
         ":nv": version + 1,
@@ -394,7 +428,7 @@ def complete_photo(number, event):
     }]
     # The description of the old photo goes with it; the history keeps it.
     old_hidden = current.get("hidden_text") or ""
-    if old_hidden:
+    if old_hidden and not keep:
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
             number, old_hidden, "", now, who, "", field="hidden_text"
         ))}})
@@ -408,15 +442,16 @@ def complete_photo(number, event):
     if pending:
         try:
             queue_recognition(number, who, thumb_key, request_language(event))
-        except Exception:
+        except Exception as exc:
             logger.exception("queue recognition failed")
+            RecognitionLog(who, number).finish("error", "Не удалось запустить распознавание", exception_text(exc))
             pending = False
     updated = dict(current)
     updated.update({
         "photo_key": original_key,
         "thumb_key": thumb_key,
         "photo_content_type": head.get("ContentType") or "image/jpeg",
-        "hidden_text": "",
+        "hidden_text": hidden,
         "updated_at": now,
         "updated_by": who,
         "version": version + 1,
@@ -459,10 +494,25 @@ def finish_recognition(number, user_email, thumb_key, lang="ru"):
     if not recognition_enabled():
         return
     number = validate_number(number)
+    log = RecognitionLog(user_email, number)
     current = get_meta(number)
-    if not current or current.get("thumb_key") != thumb_key:
+    if not current:
+        log.finish("skipped", "Коробку удалили до распознавания")
         return
-    hidden = describe_photo(user_email, thumb_key, lang)
+    if current.get("thumb_key") != thumb_key:
+        log.finish("skipped", "Фотографию заменили до распознавания")
+        return
+    try:
+        hidden = describe_photo(user_email, thumb_key, lang, log)
+    except RecognitionSkipped:
+        log.finish("skipped", "Ключ или модель Grok не заданы")
+        return
+    except ApiError as exc:
+        log.finish("error", exc.message, exc.detail)
+        return
+    except Exception as exc:
+        log.finish("error", "Внутренняя ошибка", exception_text(exc))
+        raise
     before = current.get("hidden_text") or ""
     actions = [{
         "Update": {
@@ -483,7 +533,110 @@ def finish_recognition(number, user_email, thumb_key, lang="ru"):
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
             number, before, hidden, now_iso(), user_email, "", field="hidden_text"
         ))}})
-    transact(actions)
+    try:
+        transact(actions)
+    except Exception as exc:
+        if conditional_failed(exc):
+            log.finish("skipped", "Фотографию заменили во время распознавания")
+            return
+        log.finish("error", "Внутренняя ошибка", exception_text(exc))
+        raise
+    log.finish("ok", chars=len(hidden))
+
+
+# Recognition runs in the background, so its outcome is kept per user under
+# USER#<email>, SK=RECOG#..., and shown in the settings. An attempt is written
+# as running first: if the function is stopped half-way, the entry stays so.
+# DynamoDB drops entries after RECOGNITION_LOG_DAYS through expires_at (TTL).
+# The entries also sit in the "boxes" index under gsi1pk=RECOG, newest last, so
+# administrators read everyone's log with one query; the box list asks for BOX.
+RECOGNITION_LOG_DAYS = 30
+RECOGNITION_LOST_AFTER = timedelta(minutes=3)
+
+
+class RecognitionLog:
+    def __init__(self, user_email, number):
+        self.started = datetime.now(timezone.utc)
+        started = now_iso()
+        self.item = {
+            "pk": f"USER#{user_email}",
+            "sk": f"RECOG#{started}#{uuid.uuid4().hex[:8]}",
+            "gsi1pk": "RECOG",
+            "gsi1sk": started,
+            "user": user_email,
+            "number": number,
+            "status": "running",
+            "started_at": started,
+            "expires_at": int((self.started + timedelta(days=RECOGNITION_LOG_DAYS)).timestamp()),
+        }
+        self.write()
+
+    def finish(self, status, message="", detail="", chars=0):
+        self.item.update({
+            "status": status,
+            "message": message,
+            "detail": (detail or "")[:2000],
+            "chars": chars,
+            "duration_ms": int((datetime.now(timezone.utc) - self.started).total_seconds() * 1000),
+        })
+        self.write()
+
+    # The log must never break recognition itself.
+    def write(self):
+        try:
+            table().put_item(Item=self.item)
+        except Exception:
+            logger.exception("recognition log was not written")
+
+
+def get_recognition_log(event):
+    from boto3.dynamodb.conditions import Key
+
+    resp = table().query(
+        KeyConditionExpression=Key("pk").eq(user_pk(event)) & Key("sk").begins_with("RECOG#"),
+        ScanIndexForward=False,
+        Limit=50,
+    )
+    return response(200, {"items": log_entries(resp.get("Items", []), request_language(event))})
+
+
+def admin_recognition_log(event):
+    from boto3.dynamodb.conditions import Key
+
+    resp = table().query(
+        IndexName="boxes",
+        KeyConditionExpression=Key("gsi1pk").eq("RECOG"),
+        ScanIndexForward=False,
+        Limit=100,
+    )
+    return response(200, {"items": log_entries(resp.get("Items", []), request_language(event))})
+
+
+def log_entries(rows, lang):
+    lost_before = (datetime.now(timezone.utc) - RECOGNITION_LOST_AFTER).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    items = []
+    for item in rows:
+        status = item.get("status") or ""
+        message = item.get("message") or ""
+        if status == "running" and (item.get("started_at") or "") < lost_before:
+            status = "lost"
+            message = "Распознавание не завершилось: функцию остановили по времени или из-за сбоя"
+        items.append({
+            "at": item.get("started_at") or "",
+            "user": item.get("user") or (item.get("pk") or "").removeprefix("USER#"),
+            "number": item.get("number") or "",
+            "status": status,
+            "message": translate(lang, message) if message else "",
+            "detail": item.get("detail") or "",
+            "model": item.get("model") or "",
+            "duration_ms": as_int(item.get("duration_ms")),
+            "chars": as_int(item.get("chars")),
+        })
+    return items
+
+
+def exception_text(exc):
+    return f"{type(exc).__name__}: {exc}"[:2000]
 
 
 def require_meta(number):
@@ -800,18 +953,17 @@ class RecognitionSkipped(Exception):
     pass
 
 
+# The Grok key is write-only: the page learns that a key is saved and its last
+# four characters, never the key itself, so it cannot leak through the browser.
 def get_settings(event):
     if not recognition_enabled():
         actor(event)
-        return response(200, {"recognition": False, "grok_api_key": "", "grok_model": ""})
+        return response(200, dict(key_status({}), recognition=False, grok_model=""))
     item = table().get_item(Key={"pk": user_pk(event), "sk": "SETTINGS"}).get("Item") or {}
-    return response(200, {
-        "recognition": True,
-        "grok_api_key": item.get("grok_api_key") or "",
-        "grok_model": item.get("grok_model") or "grok-4.7",
-    })
+    return response(200, dict(key_status(item), recognition=True))
 
 
+# An empty key keeps the saved one; remove_key deletes it.
 def put_settings(event):
     if not recognition_enabled():
         raise ApiError(403, "Распознавание фотографий выключено")
@@ -820,14 +972,23 @@ def put_settings(event):
     model = clean_text(payload.get("grok_model"), 80, "Модель") or "grok-4.7"
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
         raise ApiError(400, "Некорректное название модели")
-    table().put_item(Item={
-        "pk": user_pk(event),
-        "sk": "SETTINGS",
-        "grok_api_key": api_key,
-        "grok_model": model,
-        "updated_at": now_iso(),
-    })
-    return response(200, {"saved": True})
+    key = {"pk": user_pk(event), "sk": "SETTINGS"}
+    if payload.get("remove_key"):
+        api_key = ""
+    elif not api_key:
+        api_key = (table().get_item(Key=key).get("Item") or {}).get("grok_api_key") or ""
+    item = dict(key, grok_api_key=api_key, grok_model=model, updated_at=now_iso())
+    table().put_item(Item=item)
+    return response(200, dict(key_status(item), saved=True))
+
+
+def key_status(item):
+    api_key = (item.get("grok_api_key") or "").strip()
+    return {
+        "grok_key_set": bool(api_key),
+        "grok_key_hint": api_key[-4:] if len(api_key) >= 12 else "",
+        "grok_model": item.get("grok_model") or "grok-4.7",
+    }
 
 
 def user_pk(event):
@@ -849,6 +1010,8 @@ def admin_route(method, parts, params, event):
         return update_user(event)
     if parts == ["users"] and method == "DELETE":
         return delete_user(params.get("email"), event)
+    if parts == ["recognition-log"] and method == "GET":
+        return admin_recognition_log(event)
     raise ApiError(404, "Не найдено")
 
 
@@ -1005,12 +1168,14 @@ def error_code(exc):
     return data.get("Error", {}).get("Code", "") if isinstance(data, dict) else ""
 
 
-def describe_photo(user_email, thumb_key, lang="ru"):
+def describe_photo(user_email, thumb_key, lang="ru", log=None):
     settings = table().get_item(Key={"pk": f"USER#{user_email}", "sk": "SETTINGS"}).get("Item") or {}
     api_key = (settings.get("grok_api_key") or "").strip()
     model = (settings.get("grok_model") or "").strip()
     if not api_key or not model:
         raise RecognitionSkipped()
+    if log:
+        log.item["model"] = model
     raw = s3().get_object(Bucket=media_bucket(), Key=thumb_key)["Body"].read()
     if len(raw) > 8 * 1024 * 1024:
         raise ApiError(400, "Превью слишком большое для распознавания")
@@ -1040,21 +1205,42 @@ def describe_photo(user_email, thumb_key, lang="ru"):
         },
         method="POST",
     )
+    # What Grok answered goes to the recognition log; the key is cut out of it.
+    def scrub(text):
+        return text.replace(api_key, "***")[:2000]
+
     try:
         with urllib.request.urlopen(request, timeout=50) as reply:
-            data = json.loads(reply.read().decode("utf-8"))
+            raw_reply = reply.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         logger.warning("grok status %s", exc.code)
+        detail = scrub(f"HTTP {exc.code}: {read_error_body(exc)}")
         if exc.code in {401, 403}:
-            raise ApiError(502, "Проверьте API-ключ Grok в настройках") from exc
-        raise ApiError(502, "Сервис распознавания не принял фотографию") from exc
+            raise ApiError(502, "Проверьте API-ключ Grok в настройках", detail=detail) from exc
+        raise ApiError(502, "Сервис распознавания не принял фотографию", detail=detail) from exc
     except urllib.error.URLError as exc:
         logger.warning("grok network error")
-        raise ApiError(502, "Сервис распознавания недоступен") from exc
+        raise ApiError(502, "Сервис распознавания недоступен", detail=scrub(str(exc.reason))) from exc
+    except TimeoutError as exc:
+        logger.warning("grok timeout")
+        raise ApiError(502, "Сервис распознавания не ответил вовремя", detail="no answer in 50 s") from exc
+    try:
+        data = json.loads(raw_reply)
+    except ValueError as exc:
+        raise ApiError(502, "Сервис распознавания вернул непонятный ответ", detail=scrub(raw_reply)) from exc
     text = extract_response_text(data).strip()
     if not text:
-        raise ApiError(502, "Сервис распознавания не вернул описание")
+        output_types = [item.get("type") for item in data.get("output") or [] if isinstance(item, dict)]
+        detail = f"status={data.get('status')}, incomplete_details={data.get('incomplete_details')}, output={output_types}"
+        raise ApiError(502, "Сервис распознавания не вернул описание", detail=scrub(detail))
     return text[:4000]
+
+
+def read_error_body(exc):
+    try:
+        return exc.read(2000).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
 
 
 def extract_response_text(data):
@@ -1318,6 +1504,26 @@ MESSAGES = {
         "Le service de reconnaissance n’a renvoyé aucune description",
         "Il servizio di riconoscimento non ha restituito una descrizione",
     ),
+    "Сервис распознавания не ответил вовремя": (
+        "The recognition service did not answer in time",
+        "Le service de reconnaissance n’a pas répondu à temps",
+        "Il servizio di riconoscimento non ha risposto in tempo",
+    ),
+    "Сервис распознавания вернул непонятный ответ": (
+        "The recognition service returned an unreadable answer",
+        "Le service de reconnaissance a renvoyé une réponse illisible",
+        "Il servizio di riconoscimento ha restituito una risposta illeggibile",
+    ),
+    "Не удалось запустить распознавание": ("Recognition could not be started", "La reconnaissance n’a pas pu démarrer", "Impossibile avviare il riconoscimento"),
+    "Коробку удалили до распознавания": ("The box was deleted before recognition", "Le carton a été supprimé avant la reconnaissance", "La scatola è stata eliminata prima del riconoscimento"),
+    "Фотографию заменили до распознавания": ("The photo was replaced before recognition", "La photo a été remplacée avant la reconnaissance", "La foto è stata sostituita prima del riconoscimento"),
+    "Фотографию заменили во время распознавания": ("The photo was replaced during recognition", "La photo a été remplacée pendant la reconnaissance", "La foto è stata sostituita durante il riconoscimento"),
+    "Ключ или модель Grok не заданы": ("The Grok key or model is not set", "La clé ou le modèle Grok n’est pas défini", "La chiave o il modello Grok non sono impostati"),
+    "Распознавание не завершилось: функцию остановили по времени или из-за сбоя": (
+        "Recognition did not finish: the function was stopped by its time limit or a failure",
+        "La reconnaissance ne s’est pas terminée : la fonction a été arrêtée par sa limite de temps ou une panne",
+        "Il riconoscimento non è terminato: la funzione è stata fermata dal limite di tempo o da un guasto",
+    ),
     "Сервис не настроен": ("The service is not configured", "Le service n’est pas configuré", "Il servizio non è configurato"),
     "Нужны права администратора": ("Administrator rights are needed", "Droits d’administrateur requis", "Servono i diritti di amministratore"),
     "Такой пользователь уже есть": ("This user already exists", "Cet utilisateur existe déjà", "Questo utente esiste già"),
@@ -1329,6 +1535,8 @@ MESSAGES = {
         "Non puoi togliere a te stesso i diritti di amministratore",
     ),
     "Нельзя удалить самого себя": ("You cannot delete yourself", "Vous ne pouvez pas vous supprimer", "Non puoi eliminare te stesso"),
+    "Некорректная запись истории": ("Invalid history entry", "Entrée d’historique invalide", "Voce della cronologia non valida"),
+    "Такой записи в истории нет": ("There is no such history entry", "Cette entrée d’historique n’existe pas", "Questa voce della cronologia non esiste"),
     "Нужен адрес почты": ("An email address is needed", "Une adresse e-mail est requise", "Serve un indirizzo email"),
     "Распознавание фотографий выключено": (
         "Photo recognition is turned off",

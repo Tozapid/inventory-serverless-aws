@@ -27,9 +27,23 @@ resource "aws_dynamodb_table" "boxes" {
 
   global_secondary_index {
     name            = "boxes"
-    hash_key        = "gsi1pk"
-    range_key       = "gsi1sk"
     projection_type = "ALL"
+
+    key_schema {
+      attribute_name = "gsi1pk"
+      key_type       = "HASH"
+    }
+
+    key_schema {
+      attribute_name = "gsi1sk"
+      key_type       = "RANGE"
+    }
+  }
+
+  # The recognition log (SK=RECOG#...) removes itself after 30 days.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
   }
 
   point_in_time_recovery {
