@@ -474,6 +474,52 @@ test("the photo view follows the list order row by row", async (t) => {
   assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
 });
 
+test("keyboard: E edits, ⌘Enter saves, J and K move through the list", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/1" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row.selected");
+  await page.waitForSelector("#detail .detail-tools");
+  const path = () => page.evaluate(() => location.pathname);
+
+  await page.keyboard.press("KeyJ");
+  await until(async () => (await path()) === "/box/2", "J opens the next box");
+  await page.keyboard.press("KeyJ");
+  await until(async () => (await path()) === "/box/3", "and the one after");
+  await page.keyboard.press("KeyK");
+  await until(async () => (await path()) === "/box/2", "K goes back");
+
+  await page.keyboard.press("KeyE");
+  await page.waitForSelector("#detail form.stack textarea");
+  assert.equal(await page.evaluate(() => document.activeElement.tagName), "TEXTAREA", "the description is focused");
+  await page.keyboard.press("KeyJ");
+  assert.equal(await path(), "/box/2", "letters type while editing");
+  await page.keyboard.down("Meta");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Meta");
+  await until(() => api.routes("PATCH /boxes/2").length === 1, "⌘Enter saves");
+  await until(async () => !(await page.$("#detail form.stack")), "the card leaves editing");
+  assert.match(api.routes("PATCH /boxes/2")[0].body.description, /j/);
+
+  await page.click(".search input[type=search]");
+  await page.keyboard.press("KeyJ");
+  assert.equal(await path(), "/box/2", "letters in the search field stay letters");
+});
+
+test("keyboard: Ctrl+Enter creates a new box", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row");
+  await clickText(page, "button", "New box");
+  await page.waitForSelector("form.composer input");
+  await page.type("form.composer input", "30");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  await until(() => api.boxes.has("30"), "box created");
+});
+
 test("a new box is created and opened", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;

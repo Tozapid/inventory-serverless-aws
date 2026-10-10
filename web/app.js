@@ -532,6 +532,10 @@
     return match ? match[1] : null;
   }
 
+  // Shortcuts: ⌘Enter (Ctrl+Enter) saves the card or creates the box, E edits
+  // the open card, J and K open the next and the previous one in the list.
+  const SAVE_KEYS = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘Enter" : "Ctrl+Enter";
+
   function plainClick(event) {
     return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
   }
@@ -699,7 +703,7 @@
       markdownField(t("Содержимое"), contents, el("div", { class: "md" })),
       photo.node,
       el("div", { class: "row-actions" }, [
-        el("button", { class: "primary", type: "submit" }, t("Создать")),
+        el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Создать")),
         el("button", { class: "ghost", type: "button", onclick: toggleComposer }, t("Отмена")),
       ]),
       error,
@@ -929,10 +933,8 @@
         state.editing ? null : el("button", {
           class: "primary",
           type: "button",
-          onclick: () => {
-            state.editing = true;
-            renderDetail();
-          },
+          title: "E",
+          onclick: startEditing,
         }, t("Редактировать")),
         el("button", {
           class: "ghost",
@@ -1053,7 +1055,7 @@
         el("label", {}, [t("Содержимое, можно с markdown"), contents]),
         el("label", {}, [t("Комментарий к изменению содержимого"), note]),
         el("div", { class: "row-actions" }, [
-          el("button", { class: "primary", type: "submit" }, t("Сохранить")),
+          el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Сохранить")),
           el("button", {
             class: "ghost",
             type: "button",
@@ -2216,7 +2218,35 @@
     }
   });
 
+  function startEditing() {
+    if (!state.detail || state.editing) return;
+    state.editing = true;
+    renderDetail();
+    document.querySelector("#detail form.stack textarea")?.focus();
+  }
+
+  // The next (step 1) or the previous (-1) box of the list as it is shown,
+  // loading the next page at the end of the loaded ones.
+  async function stepBox(step) {
+    let index = state.items.findIndex((item) => item.number === state.selected);
+    if (index === -1) index = step > 0 ? -1 : state.items.length;
+    if (index + step >= state.items.length && state.cursor) await loadBoxes(true);
+    const item = state.items[index + step];
+    if (!item) return;
+    await openBox(item.number);
+    document.querySelector(".box-row.selected")?.scrollIntoView({ block: "nearest" });
+  }
+
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+      const form = event.target.closest?.("form.stack, form.composer")
+        || (state.editing ? document.querySelector("#detail form.stack") : null);
+      if (form && !document.querySelector(".dialog-wrap")) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+      return;
+    }
     if (event.key === "Escape") {
       if (state.lightbox >= 0) {
         closeLightbox();
@@ -2237,9 +2267,20 @@
       }
       return;
     }
-    if (event.target.closest("input, textarea")) return;
+    if (event.target.closest("input, textarea, select, [contenteditable]")) return;
     if (event.key === "ArrowRight" && state.lightbox >= 0) stepLightbox(1);
     if (event.key === "ArrowLeft" && state.lightbox >= 0) stepLightbox(-1);
+    // Letters by their place on the keyboard, so that they work in any layout.
+    // Not while a card is being edited: moving on would drop the text.
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    if (state.lightbox >= 0 || document.querySelector(".dialog-wrap") || state.editing) return;
+    if (event.code === "KeyE" && state.detail) {
+      event.preventDefault();
+      startEditing();
+    } else if (event.code === "KeyJ" || event.code === "KeyK") {
+      event.preventDefault();
+      stepBox(event.code === "KeyJ" ? 1 : -1);
+    }
   });
 
   async function boot() {
