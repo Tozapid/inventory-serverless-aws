@@ -793,7 +793,13 @@
     return parts;
   }
 
+  // Each opening gets a ticket; only the latest one may draw the card. Going
+  // 2 → 3 → 2 quickly leaves the first answer for 2 in flight, and without the
+  // ticket it would redraw the card over an edit started since.
+  let openTicket = 0;
+
   async function openBox(number, mode) {
+    const ticket = ++openTicket;
     if (state.selected !== number) {
       state.editing = false;
       state.showHidden = false;
@@ -811,12 +817,12 @@
         api("/boxes/" + encodeURIComponent(number)),
         api("/boxes/" + encodeURIComponent(number) + "/history"),
       ]);
-      if (state.selected !== number) return;
+      if (ticket !== openTicket) return;
       state.detail = card;
       state.history = history.items || [];
       renderDetail();
     } catch (error) {
-      if (state.selected !== number) return;
+      if (ticket !== openTicket) return;
       state.detail = null;
       state.history = [];
       showMissingCard(number, error.message);
@@ -2218,8 +2224,9 @@
     }
   });
 
+  // Only the card that is shown: while the next one loads, E waits.
   function startEditing() {
-    if (!state.detail || state.editing) return;
+    if (!state.detail || state.detail.number !== state.selected || state.editing) return;
     state.editing = true;
     renderDetail();
     document.querySelector("#detail form.stack textarea")?.focus();

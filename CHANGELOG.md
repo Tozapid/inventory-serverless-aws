@@ -15,6 +15,8 @@
 
 ### Changed
 
+- New example photos of the demo: drives (box 1), a toolbox (2), a label printer (3) and cables (12), re-encoded without metadata at 2560 and 1280 px. The example boxes and their hidden photo text follow the photos; searching for `spanners` or `rolls` finds a box by its photo. The CC0 photos and their credits are gone.
+- Fixed: opening boxes quickly one after another (2 → 3 → 2) let the first, late answer redraw the card, over an edit already started. Each opening now has a ticket and only the latest one draws the card; E waits until the selected card is shown.
 - The interface tests serve the page with the Content-Security-Policy from `locals.tf`, as CloudFront does. The page sets inline sizes through the DOM (`style.cssText`), which `style-src 'self'` allows; a `style` attribute is dropped by it, which made the label sample and sheets ignore their sizes on the site.
 - The photo view lays tiles out row by row in the order of the list (a CSS grid instead of CSS columns, which filled column by column): up to three columns of at least 220px, two on a phone.
 - A row of the list shows the number and the name (the first line of the description) on one line, and the rest of a longer description below it, smaller and without a frame. The number plate no longer stretches across the row.
