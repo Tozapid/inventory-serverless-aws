@@ -22,6 +22,7 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 - Search in the history, off by default: with the "in history" box ticked, search also finds a box by what it used to hold or what its earlier photos showed, and marks such a box "found in history".
 - Optional photo recognition: with a user's own Grok API key the photo is described into hidden text that search uses.
 - Optional two-step sign-in with an authenticator app (TOTP), turned on, switched to another app or off in the settings by each user.
+- Labels to print on A4 (Settings → Labels): a QR code linking to the card with the box number and/or name in the largest letters that fit; the label size (30 × 50 mm by default) and the font are chosen there and remembered.
 - Settings for administrators: invite, disable and delete users, see who has two-step sign-in and reset it for a lost phone.
 - Interface in English, Russian, French and Italian, following the system language.
 

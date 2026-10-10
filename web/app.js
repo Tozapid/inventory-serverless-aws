@@ -70,6 +70,9 @@
     Object.entries(attrs || {}).forEach(([key, value]) => {
       if (value == null || value === false) return;
       if (key === "class") node.className = value;
+      // The site's CSP (style-src 'self') drops style attributes, but not
+      // styles set through the DOM.
+      else if (key === "style") node.style.cssText = value;
       else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2), value);
       else if (key === "value") node.value = value;
       else node.setAttribute(key, value === true ? "" : value);
@@ -1413,17 +1416,19 @@
 
   // The QR code is drawn as SVG from the qrcode-generator matrix, dark on
   // white in both themes so that phone cameras read it.
-  function qrCode(text) {
+  // quiet: the white border in modules; 4 by the standard, labels use 2 to
+  // give the code more room, the cut line keeps white around it.
+  function qrCode(text, label, quiet = 4) {
     if (!window.qrcode) return null;
     const qr = window.qrcode(0, "M");
     qr.addData(text);
     qr.make();
     const count = qr.getModuleCount();
-    const size = count + 8;
+    const size = count + 2 * quiet;
     let d = "";
     for (let row = 0; row < count; row += 1) {
       for (let col = 0; col < count; col += 1) {
-        if (qr.isDark(row, col)) d += "M" + (col + 4) + " " + (row + 4) + "h1v1h-1z";
+        if (qr.isDark(row, col)) d += "M" + (col + quiet) + " " + (row + quiet) + "h1v1h-1z";
       }
     }
     const ns = "http://www.w3.org/2000/svg";
@@ -1431,7 +1436,7 @@
     svg.setAttribute("viewBox", "0 0 " + size + " " + size);
     svg.setAttribute("class", "qr");
     svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", t("QR-код для приложения-аутентификатора"));
+    svg.setAttribute("aria-label", label || t("QR-код для приложения-аутентификатора"));
     const back = document.createElementNS(ns, "rect");
     back.setAttribute("width", size);
     back.setAttribute("height", size);
@@ -1464,6 +1469,7 @@
     const sections = [["password", t("Пароль")], ["totp", t("Вход в два шага")]];
     if (config.recognition) sections.push(["recognition", t("Распознавание")]);
     sections.push(["language", t("Язык")]);
+    sections.push(["labels", t("Этикетки")]);
     if (state.admin) sections.push(["users", t("Пользователи")]);
     let current = sections.some(([key]) => key === section) ? section : "password";
     const body = el("div", { class: "settings-body" });
@@ -1492,6 +1498,7 @@
       body.replaceChildren();
       if (current === "language") languageSection(body);
       else if (current === "users") usersSection(body);
+      else if (current === "labels") labelsSection(body);
       else if (current === "recognition") recognitionSection(body, wrap);
       else if (current === "totp") totpSection(body);
       else passwordSection(body, wrap);
@@ -1499,6 +1506,293 @@
     document.querySelector(".dialog-wrap")?.remove();
     document.body.append(wrap);
     draw();
+  }
+
+  // Labels for the boxes, printed on A4. The size, the font and what goes
+  // under the QR code are chosen in the settings and kept in this browser.
+  // The text takes the largest size that fits, measured in the page.
+  const LABEL_KEY = "inventory-labels";
+  // qr and text are sizes in mm; 0 means automatic.
+  const LABEL_DEFAULTS = { width: 30, height: 50, font: "mono", number: true, name: false, qr: 0, text: 0 };
+  const LABEL_FONTS = { mono: "var(--mono)", sans: "var(--sans)", serif: "var(--serif)" };
+  // A4, with 5 mm kept free at the edges, where most printers cannot print.
+  const SHEET = { width: 210, height: 297, margin: 5 };
+  const LABEL_PAD = 1.5;
+  const LABEL_GAP = 1.5;
+
+  function labelOptions() {
+    try {
+      return cleanLabelOptions(Object.assign({}, LABEL_DEFAULTS, JSON.parse(window.localStorage.getItem(LABEL_KEY) || "{}")));
+    } catch (error) {
+      return Object.assign({}, LABEL_DEFAULTS);
+    }
+  }
+
+  function cleanLabelOptions(options) {
+    const mm = (value, max, fallback) => {
+      const number = Math.round(Number(value));
+      return Number.isFinite(number) ? Math.min(max, Math.max(15, number)) : fallback;
+    };
+    // Empty, zero or nonsense is automatic.
+    const optional = (value, min, max) => {
+      const number = Math.round(Number(value) * 10) / 10;
+      return Number.isFinite(number) && number > 0 ? Math.min(max, Math.max(min, number)) : 0;
+    };
+    return {
+      width: mm(options.width, SHEET.width - 2 * SHEET.margin, LABEL_DEFAULTS.width),
+      height: mm(options.height, SHEET.height - 2 * SHEET.margin, LABEL_DEFAULTS.height),
+      font: LABEL_FONTS[options.font] ? options.font : LABEL_DEFAULTS.font,
+      number: options.number !== false,
+      name: Boolean(options.name),
+      qr: optional(options.qr, 8, 200),
+      text: optional(options.text, 2, 60),
+    };
+  }
+
+  function saveLabelOptions(options) {
+    try {
+      window.localStorage.setItem(LABEL_KEY, JSON.stringify(options));
+    } catch (error) {
+      // Kept for this page only.
+    }
+  }
+
+  // As many labels as fit inside the free margin, the grid centred on the sheet.
+  function sheetGrid(options) {
+    const columns = Math.max(1, Math.floor((SHEET.width - 2 * SHEET.margin) / options.width));
+    const rows = Math.max(1, Math.floor((SHEET.height - 2 * SHEET.margin) / options.height));
+    return {
+      columns,
+      rows,
+      left: (SHEET.width - columns * options.width) / 2,
+      top: (SHEET.height - rows * options.height) / 2,
+    };
+  }
+
+  async function labelsSection(body) {
+    body.append(el("p", { class: "muted" }, t("Загрузка…")));
+    let boxes;
+    try {
+      boxes = await allBoxes();
+    } catch (error) {
+      body.replaceChildren(el("p", { class: "error" }, error.message));
+      return;
+    }
+    if (!boxes.length) {
+      body.replaceChildren(el("p", { class: "muted" }, t("Коробок пока нет.")));
+      return;
+    }
+    let options = labelOptions();
+    const width = el("input", { type: "number", min: "15", max: String(SHEET.width - 2 * SHEET.margin), step: "1", value: String(options.width) });
+    const height = el("input", { type: "number", min: "15", max: String(SHEET.height - 2 * SHEET.margin), step: "1", value: String(options.height) });
+    const font = el("select", {}, [
+      ["mono", t("Моноширинный")],
+      ["sans", t("Без засечек")],
+      ["serif", t("С засечками")],
+    ].map(([value, label]) => el("option", { value, selected: options.font === value ? "selected" : null }, label)));
+    const showNumber = el("input", { type: "checkbox", checked: options.number });
+    const showName = el("input", { type: "checkbox", checked: options.name });
+    const qrSize = el("input", { type: "number", min: "8", max: "200", step: "1", placeholder: t("авто"), value: options.qr ? String(options.qr) : "" });
+    const textSize = el("input", { type: "number", min: "2", max: "60", step: "0.5", placeholder: t("авто"), value: options.text ? String(options.text) : "" });
+    const perSheet = el("p", { class: "hint" });
+    const preview = el("div", { class: "label-preview" });
+    const checks = boxes.map((box) => el("input", { type: "checkbox", checked: true, onchange: () => update() }));
+    const chosen = () => boxes.filter((box, index) => checks[index].checked);
+    const print = el("button", { type: "button", class: "primary", onclick: () => printLabels(chosen(), options) });
+    const update = () => {
+      options = cleanLabelOptions({
+        width: width.value,
+        height: height.value,
+        font: font.value,
+        number: showNumber.checked,
+        name: showName.checked,
+        qr: qrSize.value,
+        text: textSize.value,
+      });
+      saveLabelOptions(options);
+      const grid = sheetGrid(options);
+      perSheet.textContent = t("На листе A4: {columns} × {rows} = {count}", { columns: grid.columns, rows: grid.rows, count: grid.columns * grid.rows });
+      // The sample is drawn at its real size, scaled down only if it is large.
+      const sample = labelNode(chosen()[0] || boxes[0], options);
+      const scale = Math.min(1, 60 / options.width, 80 / options.height);
+      sample.style.transform = "scale(" + scale + ")";
+      preview.style.width = options.width * scale + "mm";
+      preview.style.height = options.height * scale + "mm";
+      preview.replaceChildren(sample);
+      fitLabel(sample);
+      const count = chosen().length;
+      print.textContent = t("Печать: {count}", { count });
+      print.disabled = !count;
+    };
+    [width, height, font, showNumber, showName, qrSize, textSize].forEach((input) => input.addEventListener(input.type === "number" ? "input" : "change", update));
+    const setAll = (value) => {
+      checks.forEach((check) => { check.checked = value; });
+      update();
+    };
+    body.replaceChildren(
+      el("p", { class: "hint" }, t("На каждой этикетке QR-код со ссылкой на карточку. В окне печати выберите масштаб 100% и без полей.")),
+      el("div", { class: "label-options" }, [
+        el("div", { class: "label-settings" }, [
+          el("div", { class: "label-size" }, [
+            el("label", {}, [t("Ширина, мм"), width]),
+            el("label", {}, [t("Высота, мм"), height]),
+          ]),
+          perSheet,
+          el("div", { class: "label-size" }, [
+            el("label", {}, [t("Размер QR-кода, мм"), qrSize]),
+            el("label", {}, [t("Размер шрифта, мм"), textSize]),
+          ]),
+          el("label", {}, [t("Шрифт"), font]),
+          el("fieldset", { class: "label-show" }, [
+            el("legend", {}, t("Под QR-кодом")),
+            el("label", { class: "check" }, [showNumber, t("Номер")]),
+            el("label", { class: "check" }, [showName, t("Название")]),
+          ]),
+        ]),
+        el("div", { class: "label-sample" }, [el("span", { class: "muted small" }, t("Образец")), preview]),
+      ]),
+      el("div", { class: "dialog-actions start" }, [
+        el("button", { type: "button", class: "ghost tiny", onclick: () => setAll(true) }, t("Выбрать все")),
+        el("button", { type: "button", class: "ghost tiny", onclick: () => setAll(false) }, t("Снять все")),
+      ]),
+      el("div", { class: "label-choice" }, boxes.map((box, index) => el("label", { class: "check" }, [
+        checks[index],
+        el("span", { class: "plate" }, box.number),
+        " ",
+        plainTitle(box.description) || t("Без описания"),
+      ]))),
+      el("div", { class: "dialog-actions" }, [print]),
+    );
+    update();
+  }
+
+  // Every box, by number, in pages of a hundred.
+  async function allBoxes() {
+    let items = [];
+    let cursor = null;
+    do {
+      const params = new URLSearchParams({ limit: "100" });
+      if (cursor) params.set("cursor", cursor);
+      const data = await api("/boxes?" + params.toString());
+      items = items.concat(data.items || []);
+      cursor = data.next_cursor;
+    } while (cursor);
+    return items;
+  }
+
+  // The QR code, unless its size is chosen, takes 80% of the width of a tall
+  // label (and at most 55% of its height when there is text) or of the height
+  // of a wide one (and at most 45% of its width), leaving white to cut along.
+  // The text gets the rest.
+  function qrSide(options, inner, text) {
+    const wide = options.width > options.height;
+    const fits = Math.min(inner.width, inner.height);
+    if (options.qr) return Math.min(options.qr, fits);
+    if (!text) return Math.min(options.width, options.height) * 0.8;
+    return wide
+      ? Math.min(options.height * 0.8, options.width * 0.45)
+      : Math.min(options.width * 0.8, options.height * 0.55);
+  }
+
+  function labelNode(box, options) {
+    const title = plainTitle(box.description);
+    const lines = [];
+    if (options.number) lines.push(el("div", { class: "label-number" }, box.number));
+    if (options.name && title) lines.push(el("div", { class: "label-name" }, title));
+    const wide = options.width > options.height;
+    const inner = { width: options.width - 2 * LABEL_PAD, height: options.height - 2 * LABEL_PAD };
+    const side = qrSide(options, inner, lines.length > 0);
+    // As much white above the code (beside it on a wide label) as on its sides.
+    const extra = Math.max(0, ((wide ? options.height : options.width) - side) / 2 - LABEL_PAD);
+    const code = qrCode(location.origin + boxPath(box.number), t("QR-код карточки {number}", { number: box.number }), 2);
+    code.style.cssText = "width: " + side + "mm; height: " + side + "mm; margin-" + (wide ? "left" : "top") + ": " + extra + "mm";
+    const text = lines.length ? el("div", {
+      class: "label-text",
+      style: [
+        "width: " + Math.max(0, wide ? inner.width - side - extra - LABEL_GAP : inner.width) + "mm",
+        "height: " + Math.max(0, wide ? inner.height : inner.height - side - extra - LABEL_GAP) + "mm",
+        "font-family: " + LABEL_FONTS[options.font],
+      ].join("; "),
+    }, lines) : null;
+    return el("div", {
+      class: "label" + (wide ? " wide" : ""),
+      "data-text": options.text || null,
+      style: "width: " + options.width + "mm; height: " + options.height + "mm; padding: " + LABEL_PAD + "mm; gap: " + LABEL_GAP + "mm",
+    }, [code, text]);
+  }
+
+  // The largest size at which the text fits its box: the number first, the
+  // name at 40% of it (or alone at full size). Words are not broken: a long
+  // one makes the text smaller. Only a number that would come out under 4 mm
+  // may break between any letters. A chosen size is used as it is. The label
+  // must be in the page.
+  function fitLabel(label) {
+    const text = label.querySelector(".label-text");
+    if (!text) return;
+    const number = text.querySelector(".label-number");
+    const name = text.querySelector(".label-name");
+    const fits = (size) => {
+      if (number) number.style.fontSize = size + "mm";
+      if (name) name.style.fontSize = (number ? Math.max(2, size * 0.4) : size) + "mm";
+      return text.scrollHeight <= text.clientHeight + 1
+        && [...text.children].every((line) => line.scrollWidth <= line.clientWidth + 1);
+    };
+    const chosen = Number(label.dataset.text);
+    if (chosen) {
+      text.classList.add("loose");
+      fits(chosen);
+      return;
+    }
+    const largest = () => {
+      let low = 2;
+      let high = 80;
+      for (let step = 0; step < 14; step += 1) {
+        const middle = (low + high) / 2;
+        if (fits(middle)) low = middle;
+        else high = middle;
+      }
+      return low;
+    };
+    text.classList.remove("loose");
+    let size = largest();
+    if (number && size < 4) {
+      text.classList.add("loose");
+      const loose = largest();
+      if (loose > size) size = loose;
+      else text.classList.remove("loose");
+    }
+    fits(size);
+  }
+
+  // The sheets are built in the page (out of sight on screen, so that the text
+  // can be measured), shown only to the printer and removed after printing.
+  function printLabels(boxes, options) {
+    if (!boxes.length) return;
+    document.querySelector(".print-labels")?.remove();
+    const grid = sheetGrid(options);
+    const perPage = grid.columns * grid.rows;
+    const pages = [];
+    for (let start = 0; start < boxes.length; start += perPage) {
+      pages.push(el("div", {
+        class: "label-page",
+        style: [
+          "padding: " + grid.top + "mm " + grid.left + "mm",
+          "grid-template-columns: repeat(" + grid.columns + ", " + options.width + "mm)",
+          "grid-auto-rows: " + options.height + "mm",
+        ].join("; "),
+      }, boxes.slice(start, start + perPage).map((box) => labelNode(box, options))));
+    }
+    const sheets = el("div", { class: "print-labels" }, pages);
+    document.body.append(sheets);
+    sheets.querySelectorAll(".label").forEach(fitLabel);
+    document.body.classList.add("printing-labels");
+    const done = () => {
+      window.removeEventListener("afterprint", done);
+      sheets.remove();
+      document.body.classList.remove("printing-labels");
+    };
+    window.addEventListener("afterprint", done);
+    window.print();
   }
 
   function languageSection(body) {
