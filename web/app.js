@@ -4,9 +4,9 @@
   const t = I18n.t;
   const root = document.getElementById("root");
   // The chosen order stays in this browser. Storage may be off (a private
-  // window), and then the list simply starts by number.
+  // window), and then the list simply starts by number (the box address).
   const SORT_KEY = "inventory-sort";
-  const SORTS = ["number", "updated", "created"];
+  const SORTS = ["number", "name", "updated", "created"];
   const state = {
     email: "",
     mode: "list",
@@ -622,7 +622,8 @@
         "aria-label": t("Сортировка"),
         onchange: (event) => setSort(event.target.value),
       }, [
-        ["number", t("По номеру")],
+        ["number", t("По индексу")],
+        ["name", t("По имени")],
         ["updated", t("Сначала изменённые")],
         ["created", t("Сначала новые")],
       ].map(([value, label]) => el("option", { value, selected: state.sort === value ? "selected" : null }, label))),
@@ -769,10 +770,16 @@
     refreshTimer = setTimeout(() => loadBoxes(false), Math.max(when, 20000));
   }
 
+  // The number and the name on one line; the rest of a longer description
+  // below it.
   function listText(item) {
-    const parts = [el("span", { class: "plate" }, item.number)];
-    if (String(item.description || "").trim()) parts.push(markdownNode(item.description, true));
-    else parts.push(el("span", { class: "muted small" }, t("Без описания")));
+    const title = plainTitle(item.description);
+    const rest = descriptionRest(item.description);
+    const parts = [el("span", { class: "box-title" }, [
+      el("span", { class: "plate" }, item.number),
+      title ? el("strong", {}, title) : el("span", { class: "muted small" }, t("Без описания")),
+    ])];
+    if (rest) parts.push(markdownNode(rest, true));
     if (item.history_match) parts.push(el("span", { class: "history-match" }, t("найдено в истории")));
     if (state.sort === "updated") parts.push(el("span", { class: "muted small" }, t("Изменена {when}", { when: formatWhen(item.updated_at) })));
     if (state.sort === "created") parts.push(el("span", { class: "muted small" }, t("Добавлена {when}", { when: formatWhen(item.created_at) })));
@@ -1224,6 +1231,13 @@
       return;
     }
     node.replaceChildren(renderMarkdown(text, compact));
+  }
+
+  // What follows the first written line, which plainTitle makes the name.
+  function descriptionRest(text) {
+    const lines = String(text || "").split("\n");
+    const first = lines.findIndex((line) => line.trim());
+    return first === -1 ? "" : lines.slice(first + 1).join("\n").trim();
   }
 
   function plainTitle(text) {

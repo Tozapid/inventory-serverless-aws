@@ -209,22 +209,29 @@ a.brand, a.box-row, a.tile-link { color: inherit; text-decoration: none; }
 .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .box-copy { display: grid; gap: 4px; min-width: 0; align-content: center; }
 .box-copy .clip { display: block; }
-.md-compact {
+.box-title { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.box-title .plate { flex: none; }
+.box-title strong { font-weight: 600; overflow-wrap: anywhere; }
+.md.md-compact {
   background: transparent;
   border: 0;
   padding: 0;
+  font-size: 14px;
+  color: var(--muted);
 }
 .md-compact h3, .md-compact h4, .md-compact h5 { font-size: 0.95rem; }
 
+/* A grid, not CSS columns: the tiles follow the list order row by row. Up to
+   three columns of at least 220px, two on a phone. */
 .gallery {
-  columns: 3 220px;
-  column-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(max(220px, calc((100% - 24px) / 3)), 1fr));
+  gap: 12px;
   margin-top: 12px;
 }
 
 .tile {
-  break-inside: avoid;
-  margin: 0 0 12px;
+  margin: 0;
   width: 100%;
   padding: 0;
   border: 1px solid var(--line);
@@ -382,7 +389,7 @@ button.tiny { padding: 4px 8px; font-size: 12px; }
   }
   .detail.is-empty { display: none; }
   .back { display: inline-flex; }
-  .gallery { columns: 2 140px; }
+  .gallery { grid-template-columns: repeat(auto-fill, minmax(max(140px, calc((100% - 12px) / 2)), 1fr)); }
   .diff { grid-template-columns: 1fr; }
   .who span { display: none; }
 }

@@ -123,15 +123,8 @@ def list_boxes(event):
     tokens = query_tokens(params.get("q") or "")[:8]
     limit = clamp_limit(params.get("limit"))
     cursor = decode_cursor(params.get("cursor"))
-    sort = params.get("sort") if params.get("sort") in DATE_SORTS else "number"
-    if sort != "number":
-        items, next_key = sorted_page(tokens, params.get("history") == "1", sort, cursor, limit)
-    elif tokens and params.get("history") == "1":
-        items, next_key = search_with_history(tokens, cursor, limit)
-    elif tokens:
-        items, next_key = search_boxes(tokens, cursor, limit)
-    else:
-        items, next_key = query_boxes(cursor, limit)
+    sort = params.get("sort") if params.get("sort") in LIST_SORTS else "number"
+    items, next_key = sorted_page(tokens, params.get("history") == "1", sort, cursor, limit)
     return response(200, {
         "items": [dict(public_card(item), **({"history_match": True} if item.get("history_match") else {})) for item in items],
         "next_cursor": encode_cursor(next_key),
@@ -154,10 +147,18 @@ def query_boxes(cursor, limit):
     return resp.get("Items", []), resp.get("LastEvaluatedKey")
 
 
-# The newest first. Dates are in no index, so every matching card is read,
-# sorted here and cut into pages by position: an inventory holds a few hundred
-# boxes. Sorting by number keeps the paged reads above.
+# Every matching card is read, sorted here and cut into pages by position: an
+# inventory holds a few hundred boxes. By number (the box address, /box/<number>)
+# is the default, with numbers inside compared as numbers; then by name and the
+# newest first by date.
 DATE_SORTS = {"updated": "updated_at", "created": "created_at"}
+LIST_SORTS = {"number", "name", *DATE_SORTS}
+
+
+# "A-9" before "A-10", "12" before "12a" before "13", plain numbers first.
+def natural_key(number):
+    parts = [part for part in re.split(r"(\d+)", (number or "").lower()) if part]
+    return [(0, int(part), part) if part.isdigit() else (1, 0, part) for part in parts]
 
 
 def sorted_page(tokens, history, sort, cursor, limit):
@@ -181,9 +182,12 @@ def sorted_page(tokens, history, sort, cursor, limit):
     items = list(found.values())
     if sort == "created":
         fill_created(items)
-    field = DATE_SORTS[sort]
-    items.sort(key=lambda item: item.get("gsi1sk") or "")
-    items.sort(key=lambda item: item.get(field) or "", reverse=True)
+    items.sort(key=lambda item: natural_key(item.get("number")))
+    if sort == "name":
+        # Boxes without a description go last, by number.
+        items.sort(key=lambda item: (not plain_title(item.get("description")), fold(plain_title(item.get("description")))))
+    elif sort in DATE_SORTS:
+        items.sort(key=lambda item: item.get(DATE_SORTS[sort]) or "", reverse=True)
     offset = max(0, as_int((cursor or {}).get("offset")))
     rest = items[offset:offset + limit]
     more = offset + limit < len(items)
@@ -213,6 +217,15 @@ def fill_created(items):
             )
         except Exception:
             logger.exception("created_at was not saved")
+
+
+# The name of a box is the first line of its description without Markdown, as
+# the page shows it (plainTitle in web/app.js).
+def plain_title(text):
+    line = next((part.strip() for part in (text or "").split("\n") if part.strip()), "")
+    line = re.sub(r"^#{1,6}\s+", "", line)
+    line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+    return re.sub(r"[*_`]", "", line).strip()
 
 
 def search_boxes(tokens, cursor, limit):

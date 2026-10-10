@@ -138,7 +138,11 @@ function fakeApi() {
           items.push({ ...card(box), history_match: true });
         }
       }
+      // By number unless asked otherwise, as the API does; the example boxes are
+      // already in that order. The name is the first line of the description.
       const sort = url.searchParams.get("sort");
+      const name = (item) => fold((String(item.description).split("\n").find((line) => line.trim()) || "").replace(/[#*_`]/g, ""));
+      if (sort === "name") items.sort((a, b) => name(a).localeCompare(name(b)));
       if (sort === "updated") items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       if (sort === "created") items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return [200, { items, next_cursor: null, urls_expire_at: "2026-09-01T11:00:00Z" }];
@@ -388,14 +392,20 @@ test("an admin switches to everyone's recognition log", async (t) => {
   await until(async () => (await page.$$(".recognition-log .log-entry")).length === 2, "back to own log");
 });
 
-test("sorting is by number first, and the choice is kept", async (t) => {
+test("sorting is by index first, and the choice is kept", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
   const { page, api } = wiki;
   await page.waitForSelector(".box-row");
   assert.equal(await page.$eval(".sort-select", (node) => node.value), "number");
+  assert.deepEqual(await page.$$eval(".sort-select option", (nodes) => nodes.map((node) => node.textContent)),
+    ["By index", "By name", "Recently changed first", "Newest first"]);
   assert.deepEqual(await rowNumbers(page), ["1", "2", "3", "4", "5", "12", "A-7"]);
   assert.equal(api.routes("GET /boxes").at(-1).query.sort, undefined);
+
+  await page.select(".sort-select", "name");
+  await until(async () => (await rowNumbers(page))[0] === "12", "by name: Cables and chargers first");
+  assert.equal(api.routes("GET /boxes").at(-1).query.sort, "name");
 
   await page.select(".sort-select", "created");
   await until(async () => (await rowNumbers(page))[0] === "A-7", "newest first");
@@ -417,6 +427,42 @@ test("sorting is by number first, and the choice is kept", async (t) => {
   await clickText(page, "#detail form.stack button", "Save");
   await until(async () => (await rowNumbers(page))[0] === "3", "the edited box comes first");
   assert.equal(await page.$eval(".sort-select", (node) => node.value), "updated", "kept after editing");
+});
+
+test("a row shows the number and the name, the rest of the description below", async (t) => {
+  const api = fakeApi();
+  api.boxes.get("1").description = "Electronics: **Raspberry Pi** kit\nShelf 2, top left";
+  api.boxes.get("5").description = "";
+  const wiki = await openInventory(t, { api });
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  const rows = await page.$$eval(".box-row .box-copy", (nodes) => nodes.map((node) => ({
+    title: node.querySelector(".box-title").textContent,
+    rest: node.querySelector(".md-compact")?.textContent.trim() || "",
+  })));
+  assert.deepEqual(rows[0], { title: "1Electronics: Raspberry Pi kit", rest: "Shelf 2, top left" });
+  assert.deepEqual(rows[1], { title: "2Small hand tools", rest: "" }, "a one-line description has nothing below");
+  assert.deepEqual(rows[4], { title: "5No description", rest: "" });
+});
+
+test("the photo view follows the list order row by row", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  await clickText(page, ".seg button", "Photos");
+  await page.waitForSelector(".gallery .tile");
+  // Tiles as the eye reads them: top to bottom, then left to right.
+  const seen = () => page.$$eval(".gallery .tile", (tiles) => tiles
+    .map((tile) => ({ number: tile.querySelector(".plate").textContent, box: tile.getBoundingClientRect() }))
+    .sort((a, b) => Math.round(a.box.top) - Math.round(b.box.top) || a.box.left - b.box.left)
+    .map((tile) => tile.number));
+  assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
+  const tops = await page.$$eval(".gallery .tile", (tiles) => tiles.slice(0, 3).map((tile) => Math.round(tile.getBoundingClientRect().top)));
+  assert.equal(new Set(tops).size, 1, "the first three tiles share a row");
+  await page.setViewport({ width: 390, height: 844 });
+  assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
 });
 
 test("a new box is created and opened", async (t) => {
