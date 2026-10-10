@@ -532,8 +532,10 @@
     return match ? match[1] : null;
   }
 
-  // Shortcuts: ⌘Enter (Ctrl+Enter) saves the card or creates the box, E edits
-  // the open card, J and K open the next and the previous one in the list.
+  // Shortcuts: ⌘Enter (Ctrl+Enter) saves the card or creates the box; I, J and
+  // L sit like arrow keys: I edits the open card, J opens the previous box of
+  // the list and L the next one. Esc leaves editing, asking first if anything
+  // was changed, and then closes the card.
   const SAVE_KEYS = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘Enter" : "Ctrl+Enter";
 
   function plainClick(event) {
@@ -939,7 +941,7 @@
         state.editing ? null : el("button", {
           class: "primary",
           type: "button",
-          title: "E",
+          title: "I",
           onclick: startEditing,
         }, t("Редактировать")),
         el("button", {
@@ -2224,7 +2226,7 @@
     }
   });
 
-  // Only the card that is shown: while the next one loads, E waits.
+  // Only the card that is shown: while the next one loads, I waits.
   function startEditing() {
     if (!state.detail || state.detail.number !== state.selected || state.editing) return;
     state.editing = true;
@@ -2242,6 +2244,22 @@
     if (!item) return;
     await openBox(item.number);
     document.querySelector(".box-row.selected")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // Whether the card being edited has changes that Esc would throw away.
+  function editChanged() {
+    const form = document.querySelector("#detail form.stack");
+    const card = state.detail;
+    if (!form || !card) return false;
+    const [description, contents] = form.querySelectorAll("textarea");
+    const note = form.querySelector("input:not([type=file])");
+    return description.value !== (card.description || "")
+      || contents.value !== (card.contents || "")
+      || Boolean(note && note.value.trim());
+  }
+
+  function formHasText(form) {
+    return [...form.querySelectorAll("input, textarea")].some((field) => (field.type === "file" ? field.files.length : field.value.trim()));
   }
 
   document.addEventListener("keydown", (event) => {
@@ -2264,14 +2282,23 @@
         dialog.remove();
         return;
       }
-      if (state.selected && !(event.target && event.target.closest && event.target.closest("textarea, input"))) {
-        if (state.editing) {
+      // Esc works in the fields too: the new box form closes, an edit ends.
+      const composer = event.target.closest?.("form.composer");
+      if (composer) {
+        if (!formHasText(composer) || window.confirm(t("Отменить несохранённые изменения?"))) {
+          composerOpen = false;
+          renderCatalog();
+        }
+        return;
+      }
+      if (state.editing) {
+        if (!editChanged() || window.confirm(t("Отменить несохранённые изменения?"))) {
           state.editing = false;
           renderDetail();
-        } else {
-          closeDetail();
         }
+        return;
       }
+      if (state.selected && !event.target.closest?.("input, textarea, select")) closeDetail();
       return;
     }
     if (event.target.closest("input, textarea, select, [contenteditable]")) return;
@@ -2281,12 +2308,12 @@
     // Not while a card is being edited: moving on would drop the text.
     if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
     if (state.lightbox >= 0 || document.querySelector(".dialog-wrap") || state.editing) return;
-    if (event.code === "KeyE" && state.detail) {
+    if (event.code === "KeyI" && state.detail) {
       event.preventDefault();
       startEditing();
-    } else if (event.code === "KeyJ" || event.code === "KeyK") {
+    } else if (event.code === "KeyJ" || event.code === "KeyL") {
       event.preventDefault();
-      stepBox(event.code === "KeyJ" ? 1 : -1);
+      stepBox(event.code === "KeyL" ? 1 : -1);
     }
   });
 

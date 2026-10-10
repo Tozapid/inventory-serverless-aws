@@ -475,7 +475,7 @@ test("the photo view follows the list order row by row", async (t) => {
   assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
 });
 
-test("keyboard: E edits, ⌘Enter saves, J and K move through the list", async (t) => {
+test("keyboard: I edits, ⌘Enter saves, J and L move through the list", async (t) => {
   const wiki = await openInventory(t, { at: "/box/1" });
   if (!wiki) return;
   const { page, api } = wiki;
@@ -483,29 +483,64 @@ test("keyboard: E edits, ⌘Enter saves, J and K move through the list", async (
   await page.waitForSelector("#detail .detail-tools");
   const path = () => page.evaluate(() => location.pathname);
 
-  await page.keyboard.press("KeyJ");
-  await until(async () => (await path()) === "/box/2", "J opens the next box");
-  await page.keyboard.press("KeyJ");
+  await page.keyboard.press("KeyL");
+  await until(async () => (await path()) === "/box/2", "L opens the next box");
+  await page.keyboard.press("KeyL");
   await until(async () => (await path()) === "/box/3", "and the one after");
-  await page.keyboard.press("KeyK");
-  await until(async () => (await path()) === "/box/2", "K goes back");
+  await page.keyboard.press("KeyJ");
+  await until(async () => (await path()) === "/box/2", "J goes back");
   await page.waitForFunction(() => document.querySelector("#detail .plate")?.textContent === "2");
 
-  await page.keyboard.press("KeyE");
+  await page.keyboard.press("KeyI");
   await page.waitForSelector("#detail form.stack textarea");
   assert.equal(await page.evaluate(() => document.activeElement.tagName), "TEXTAREA", "the description is focused");
-  await page.keyboard.press("KeyJ");
+  await page.keyboard.press("KeyL");
   assert.equal(await path(), "/box/2", "letters type while editing");
   await page.keyboard.down("Meta");
   await page.keyboard.press("Enter");
   await page.keyboard.up("Meta");
   await until(() => api.routes("PATCH /boxes/2").length === 1, "⌘Enter saves");
   await until(async () => !(await page.$("#detail form.stack")), "the card leaves editing");
-  assert.match(api.routes("PATCH /boxes/2")[0].body.description, /j/);
+  assert.match(api.routes("PATCH /boxes/2")[0].body.description, /l/);
 
   await page.click(".search input[type=search]");
-  await page.keyboard.press("KeyJ");
+  await page.keyboard.press("KeyL");
   assert.equal(await path(), "/box/2", "letters in the search field stay letters");
+});
+
+test("keyboard: Esc leaves editing from a field, asking if the text changed", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/2" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  const asked = [];
+  page.on("dialog", (dialog) => asked.push(dialog.message()));
+  await page.waitForSelector("#detail .detail-tools");
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("#detail form.stack")), "no changes: Esc leaves at once");
+  assert.deepEqual(asked, []);
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.keyboard.type(" and more");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("#detail form.stack")), "changes: asked, then left");
+  assert.deepEqual(asked, ["Discard unsaved changes?"]);
+  assert.equal(api.routes("PATCH /boxes/2").length, 0, "nothing saved");
+
+  await page.keyboard.press("Escape");
+  await until(async () => (await page.evaluate(() => location.pathname)) === "/", "the next Esc closes the card");
+
+  await clickText(page, "button", "New box");
+  await page.waitForSelector("form.composer input");
+  await page.keyboard.press("Escape");
+  assert.ok(await page.$("form.composer"), "the empty form stays until focused");
+  await page.type("form.composer input", "31");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("form.composer")), "Esc closes the new box form");
+  assert.deepEqual(asked, ["Discard unsaved changes?", "Discard unsaved changes?"]);
 });
 
 test("keyboard: Ctrl+Enter creates a new box", async (t) => {
