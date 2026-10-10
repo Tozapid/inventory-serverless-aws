@@ -7,6 +7,7 @@
     email: "",
     mode: "list",
     query: "",
+    searchHistory: false,
     items: [],
     cursor: null,
     loading: false,
@@ -285,6 +286,7 @@
         state.detail.version = saved.version;
         state.detail.updated_at = saved.updated_at;
         state.detail.updated_by = saved.updated_by;
+        state.detail.hidden_text = "";
       }
       const frame = document.querySelector("#detail .frame");
       if (frame && saved.photo_url) {
@@ -302,9 +304,9 @@
       toast(savedMessage);
       if (saved.recognition_pending) {
         state.awaitRecognition = number;
-        state.detail.hidden_text = "";
         watchRecognition(number);
       }
+      await reloadHistory(number);
       await loadBoxes(false);
     } catch (error) {
       if (status) status.textContent = error.message;
@@ -500,6 +502,17 @@
         searchTimer = setTimeout(() => loadBoxes(false), 250);
       },
     });
+    const inHistory = el("label", { class: "search-history", title: t("Искать и в прежних версиях содержимого и описаний фото") }, [
+      el("input", {
+        type: "checkbox",
+        onchange: (event) => {
+          state.searchHistory = event.target.checked;
+          if (state.query.trim()) loadBoxes(false);
+        },
+      }),
+      t("в истории"),
+    ]);
+    inHistory.querySelector("input").checked = state.searchHistory;
     root.replaceChildren(el("div", { class: "app" }, [
       el("header", { class: "top" }, [
         el("a", {
@@ -510,7 +523,7 @@
           el("div", { class: "mark" }, t("К")),
           el("div", {}, [el("strong", {}, t("Коробки")), el("span", {}, t("инвентарь"))]),
         ]),
-        el("div", { class: "search" }, search),
+        el("div", { class: "search" }, [search, inHistory]),
         el("div", { class: "seg" }, [
           el("button", { type: "button", class: state.mode === "list" ? "active" : "", onclick: () => setMode("list") }, t("Список")),
           el("button", { type: "button", class: state.mode === "photos" ? "active" : "", onclick: () => setMode("photos") }, t("Фото")),
@@ -665,9 +678,13 @@
     try {
       const params = new URLSearchParams();
       if (state.query.trim()) params.set("q", state.query.trim());
+      if (state.query.trim() && state.searchHistory) params.set("history", "1");
       if (append && state.cursor) params.set("cursor", state.cursor);
       const data = await api("/boxes?" + params.toString());
-      state.items = append ? state.items.concat(data.items) : data.items;
+      // Searching the history, a box can come back on the next page again.
+      const seen = new Set(append ? state.items.map((item) => item.number) : []);
+      const fresh = data.items.filter((item) => !seen.has(item.number));
+      state.items = append ? state.items.concat(fresh) : fresh;
       state.cursor = data.next_cursor;
       state.urlsExpireAt = data.urls_expire_at;
       scheduleRefresh();
@@ -690,6 +707,7 @@
     const parts = [el("span", { class: "plate" }, item.number)];
     if (String(item.description || "").trim()) parts.push(markdownNode(item.description, true));
     else parts.push(el("span", { class: "muted small" }, t("Без описания")));
+    if (item.history_match) parts.push(el("span", { class: "history-match" }, t("найдено в истории")));
     return parts;
   }
 
@@ -747,6 +765,17 @@
     renderDetail();
   }
 
+  async function reloadHistory(number) {
+    try {
+      const history = await api("/boxes/" + encodeURIComponent(number) + "/history");
+      if (state.selected !== number) return;
+      state.history = history.items || [];
+      if (!state.editing) renderDetail();
+    } catch (error) {
+      // The card keeps the history it has.
+    }
+  }
+
   let recognitionTimer = null;
 
   function watchRecognition(number) {
@@ -762,6 +791,7 @@
           state.awaitRecognition = null;
           state.detail = fresh;
           renderDetail();
+          reloadHistory(number);
           return;
         }
       } catch (error) {
@@ -889,7 +919,7 @@
         formattedDescription,
         markdownNode(card.contents || ""),
         recognitionControl(card),
-        el("div", { class: "history-head" }, [el("h3", {}, t("История содержимого"))]),
+        el("div", { class: "history-head" }, [el("h3", {}, t("История изменений"))]),
         renderHistory(),
       ]).filter(Boolean));
       return;
@@ -957,7 +987,7 @@
         ]),
         error,
       ]),
-      el("div", { class: "history-head" }, [el("h3", {}, t("История содержимого"))]),
+      el("div", { class: "history-head" }, [el("h3", {}, t("История изменений"))]),
       renderHistory()
     );
   }
@@ -1139,10 +1169,15 @@
   }
 
   function renderHistory() {
-    if (!state.history.length) return el("p", { class: "muted small" }, t("Изменений содержимого ещё не было."));
+    if (!state.history.length) return el("p", { class: "muted small" }, t("Изменений ещё не было."));
     return el("div", { class: "history" }, state.history.map((item) => el("article", { class: "event" }, [
       el("strong", {}, formatWhen(item.at)),
-      el("span", { class: "muted small" }, [item.by || "—", item.note ? " · " + historyNote(item.note) : ""]),
+      el("span", { class: "muted small" }, [
+        item.field === "hidden_text" ? t("Описание фото") : t("Содержимое"),
+        " · ",
+        item.by || "—",
+        item.note ? " · " + historyNote(item.note) : "",
+      ]),
       el("div", { class: "diff" }, [
         el("div", {}, [el("span", { class: "muted small" }, t("Было")), markdownNode(item.before)]),
         el("div", {}, [el("span", { class: "muted small" }, t("Стало")), markdownNode(item.after)]),

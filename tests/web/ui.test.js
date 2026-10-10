@@ -116,7 +116,7 @@ function fakeApi() {
   });
   seed.forEach((box) => {
     boxes.set(box.number, box);
-    history.set(box.number, box.history.map((entry) => ({ at: "2026-09-01T10:00:00Z", by: ADMIN.email, before: entry.before, after: entry.after, note: entry.note })).reverse());
+    history.set(box.number, box.history.map((entry) => ({ at: "2026-09-01T10:00:00Z", by: ADMIN.email, field: "contents", before: entry.before, after: entry.after, note: entry.note })).reverse());
   });
 
   function handle(method, url, body) {
@@ -126,9 +126,14 @@ function fakeApi() {
     const hist = /^\/boxes\/([^/]+)\/history$/.exec(url.pathname.replace(/^\/api/, ""));
     if (route === "GET /boxes") {
       const words = fold(url.searchParams.get("q")).split(" ").filter(Boolean);
-      const items = [...boxes.values()]
-        .filter((box) => words.every((word) => fold([box.number, box.description, box.contents, box.hidden].join(" ")).includes(word)))
-        .map(card);
+      const matches = (parts) => words.every((word) => fold(parts.join(" ")).includes(word));
+      const items = [];
+      for (const box of boxes.values()) {
+        if (matches([box.number, box.description, box.contents, box.hidden])) items.push(card(box));
+        else if (url.searchParams.get("history") === "1" && (history.get(box.number) || []).some((entry) => matches([box.number, entry.note, entry.before, entry.after]))) {
+          items.push({ ...card(box), history_match: true });
+        }
+      }
       return [200, { items, next_cursor: null, urls_expire_at: "2026-09-01T11:00:00Z" }];
     }
     if (route === "POST /boxes") {
@@ -287,9 +292,25 @@ test("search finds a box by what is in its photo", async (t) => {
   if (!wiki) return;
   const { page, api } = wiki;
   await page.waitForSelector(".box-row");
-  await page.type(".search input", "baubles");
+  await page.type(".search input[type=search]", "baubles");
   await until(async () => JSON.stringify(await rowNumbers(page)) === JSON.stringify(["3"]), "only the Christmas box");
   assert.equal(api.routes("GET /boxes").at(-1).query.q, "baubles");
+});
+
+test("search looks through the history only when asked", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row");
+  assert.equal(await page.$eval(".search-history input", (node) => node.checked), false, "off by default");
+  await page.type(".search input[type=search]", "added");
+  await page.waitForSelector(".empty");
+  assert.equal(api.routes("GET /boxes").at(-1).query.history, undefined);
+
+  await page.click(".search-history input");
+  await until(async () => JSON.stringify(await rowNumbers(page)) === JSON.stringify(["1"]), "the box whose history mentions it");
+  assert.equal(api.routes("GET /boxes").at(-1).query.history, "1");
+  assert.equal(await text(page, ".box-row .history-match"), "found in history");
 });
 
 test("a new box is created and opened", async (t) => {

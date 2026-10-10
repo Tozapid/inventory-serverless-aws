@@ -345,6 +345,101 @@ class RecognitionSwitchTest(unittest.TestCase):
         self.assertFalse(lambda_app.recognition_configured("person@example.com"))
 
 
+class ScanTable:
+    """Rows in memory. The scan filter is left to the code under test."""
+
+    def __init__(self, rows):
+        self.rows = {(row["pk"], row["sk"]): row for row in rows}
+
+    def scan(self, **kwargs):
+        return {"Items": list(self.rows.values())}
+
+    def get_item(self, Key):
+        row = self.rows.get((Key["pk"], Key["sk"]))
+        return {"Item": row} if row else {}
+
+    def query(self, KeyConditionExpression, **kwargs):
+        pk = KeyConditionExpression.get_expression()["values"][0].get_expression()["values"][1]
+        rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith("HIST#")]
+        return {"Items": sorted(rows, key=lambda row: row["sk"], reverse=True)}
+
+
+def meta(number, contents, hidden=""):
+    return {"pk": "BOX#" + number, "sk": "META", "number": number, "gsi1sk": lambda_app.sort_key(number),
+            "description": "", "contents": contents, "hidden_text": hidden, "thumb_key": "",
+            "search_text": lambda_app.build_search(number, "", contents, hidden), "version": 1}
+
+
+class HistorySearchTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes")
+        lambda_app._table = ScanTable([
+            meta("1", "Гирлянда"),
+            lambda_app.history_item("1", "", "Гирлянда", "2026-09-01T10:00:00.000Z", "a@example.com", ""),
+            meta("2", "Пусто"),
+            lambda_app.history_item("2", "Старая Ёлка", "Пусто", "2026-09-02T10:00:00.000Z", "a@example.com", "Убрали"),
+            meta("3", "Провода"),
+            lambda_app.history_item("3", "", "", "2026-09-03T10:00:00.000Z", "a@example.com", "", field="hidden_text"),
+        ])
+
+    def tearDown(self):
+        lambda_app._table = None
+
+    def numbers(self, params):
+        status, body = call("GET", "/api/boxes", params=params)
+        self.assertEqual(status, 200)
+        return {item["number"]: item.get("history_match", False) for item in body["items"]}
+
+    def test_old_contents_are_found_only_when_asked(self):
+        self.assertEqual(self.numbers({"q": "елка", "history": "1"}), {"2": True})
+
+    def test_a_current_match_is_not_marked(self):
+        self.assertEqual(self.numbers({"q": "гирлянда", "history": "1"}), {"1": False})
+
+    def test_every_word_has_to_match_one_entry(self):
+        self.assertEqual(self.numbers({"q": "елка убрали", "history": "1"}), {"2": True})
+        self.assertEqual(self.numbers({"q": "елка гирлянда", "history": "1"}), {})
+
+
+class HiddenTextHistoryTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", RECOGNITION="true")
+        self.written = []
+        self.table = lambda_app._table = ScanTable([dict(meta("5", "Кабели", "Старое описание"), thumb_key="boxes/5/thumb/new.jpg")])
+        self.saved = (lambda_app.transact, lambda_app.describe_photo)
+        lambda_app.transact = self.written.extend
+        lambda_app.describe_photo = lambda user, key, lang: "Новое описание"
+
+    def tearDown(self):
+        lambda_app.transact, lambda_app.describe_photo = self.saved
+        lambda_app._table = None
+
+    def puts(self):
+        from boto3.dynamodb.types import TypeDeserializer
+
+        load = TypeDeserializer().deserialize
+        return [{key: load(value) for key, value in action["Put"]["Item"].items()} for action in self.written if "Put" in action]
+
+    def test_recognition_writes_a_history_entry(self):
+        lambda_app.finish_recognition("5", "owner@example.com", "boxes/5/thumb/new.jpg", "ru")
+        [entry] = self.puts()
+        self.assertEqual(entry["field"], "hidden_text")
+        self.assertEqual((entry["contents_before"], entry["contents_after"]), ("Старое описание", "Новое описание"))
+        self.assertEqual(entry["changed_by"], "owner@example.com")
+
+    def test_a_stale_photo_writes_nothing(self):
+        lambda_app.finish_recognition("5", "owner@example.com", "boxes/5/thumb/old.jpg", "ru")
+        self.assertEqual(self.written, [])
+
+    def test_history_says_which_field_changed(self):
+        self.table.rows[("BOX#5", "HIST#1")] = lambda_app.history_item("5", "a", "b", "2026-09-01T10:00:00.000Z", "x@example.com", "")
+        self.table.rows[("BOX#5", "HIST#2")] = lambda_app.history_item("5", "", "c", "2026-09-02T10:00:00.000Z", "x@example.com", "", field="hidden_text")
+        self.table.rows = {(row["pk"], row["sk"]): row for row in self.table.rows.values()}
+        status, body = call("GET", "/api/boxes/5/history")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["field"] for item in body["items"]], ["hidden_text", "contents"])
+
+
 class SigningTest(unittest.TestCase):
     def test_signature_matches_openssl(self):
         with tempfile.TemporaryDirectory() as tmp:
