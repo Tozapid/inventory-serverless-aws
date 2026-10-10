@@ -394,6 +394,8 @@ button.tiny { padding: 4px 8px; font-size: 12px; }
 .login-lang { margin-top: 16px; display: flex; justify-content: flex-end; }
 
 .lang-select { width: auto; font-size: 13px; padding: 4px 8px; }
+#catalog-head { flex-wrap: wrap; }
+.sort-select { width: auto; margin-left: auto; font-size: 13px; padding: 6px 8px; }
 
 /* Settings ------------------------------------------------------------ */
 

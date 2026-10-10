@@ -91,6 +91,7 @@ def seed_table(table, author):
         number = box["number"]
         history = box.get("history") or []
         updated = stamp(now, min((entry["days"] for entry in history), default=1))
+        created = stamp(now, max((entry["days"] for entry in history), default=1))
         item = {
             "pk": lambda_app.box_pk(number),
             "sk": "META",
@@ -101,6 +102,7 @@ def seed_table(table, author):
             "contents": box["contents"],
             "hidden_text": box.get("hidden") or "",
             "search_text": lambda_app.build_search(number, box["description"], box["contents"], box.get("hidden") or ""),
+            "created_at": created,
             "updated_at": updated,
             "updated_by": author,
             "version": 1 + len(history),

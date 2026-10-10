@@ -123,7 +123,10 @@ def list_boxes(event):
     tokens = query_tokens(params.get("q") or "")[:8]
     limit = clamp_limit(params.get("limit"))
     cursor = decode_cursor(params.get("cursor"))
-    if tokens and params.get("history") == "1":
+    sort = params.get("sort") if params.get("sort") in DATE_SORTS else "number"
+    if sort != "number":
+        items, next_key = sorted_page(tokens, params.get("history") == "1", sort, cursor, limit)
+    elif tokens and params.get("history") == "1":
         items, next_key = search_with_history(tokens, cursor, limit)
     elif tokens:
         items, next_key = search_boxes(tokens, cursor, limit)
@@ -149,6 +152,67 @@ def query_boxes(cursor, limit):
         kwargs["ExclusiveStartKey"] = cursor
     resp = table().query(**kwargs)
     return resp.get("Items", []), resp.get("LastEvaluatedKey")
+
+
+# The newest first. Dates are in no index, so every matching card is read,
+# sorted here and cut into pages by position: an inventory holds a few hundred
+# boxes. Sorting by number keeps the paged reads above.
+DATE_SORTS = {"updated": "updated_at", "created": "created_at"}
+
+
+def sorted_page(tokens, history, sort, cursor, limit):
+    if tokens and history:
+        fetch = lambda start: search_with_history(tokens, start, 1000)
+    elif tokens:
+        fetch = lambda start: search_boxes(tokens, start, 1000)
+    else:
+        fetch = lambda start: query_boxes(start, 1000)
+    # A box found by its history on one pass and by its card on another counts
+    # once, as a card match.
+    found = {}
+    start = None
+    while True:
+        page, start = fetch(start)
+        for item in page:
+            if item["pk"] not in found or found[item["pk"]].get("history_match"):
+                found[item["pk"]] = item
+        if not start:
+            break
+    items = list(found.values())
+    if sort == "created":
+        fill_created(items)
+    field = DATE_SORTS[sort]
+    items.sort(key=lambda item: item.get("gsi1sk") or "")
+    items.sort(key=lambda item: item.get(field) or "", reverse=True)
+    offset = max(0, as_int((cursor or {}).get("offset")))
+    rest = items[offset:offset + limit]
+    more = offset + limit < len(items)
+    return rest, {"offset": offset + limit} if more else None
+
+
+# Boxes from before created_at existed get the time of their first history
+# entry (usually "box created"), otherwise of their last change, saved once.
+def fill_created(items):
+    from boto3.dynamodb.conditions import Key
+
+    for item in items:
+        if item.get("created_at"):
+            continue
+        first = table().query(
+            KeyConditionExpression=Key("pk").eq(item["pk"]) & Key("sk").begins_with("HIST#"),
+            ScanIndexForward=True,
+            Limit=1,
+        ).get("Items", [])
+        item["created_at"] = (first[0].get("changed_at") if first else "") or item.get("updated_at") or ""
+        try:
+            table().update_item(
+                Key={"pk": item["pk"], "sk": "META"},
+                UpdateExpression="SET created_at = if_not_exists(created_at, :c)",
+                ConditionExpression="attribute_exists(pk)",
+                ExpressionAttributeValues={":c": item["created_at"]},
+            )
+        except Exception:
+            logger.exception("created_at was not saved")
 
 
 def search_boxes(tokens, cursor, limit):
@@ -240,6 +304,7 @@ def create_box(event):
         "description": description,
         "contents": contents,
         "search_text": build_search(number, description, contents),
+        "created_at": now,
         "updated_at": now,
         "updated_by": who,
         "version": 1,
@@ -745,6 +810,7 @@ def public_card(item):
         "has_photo": bool(photo_key),
         "thumb_url": signed_get(thumb_key or photo_key),
         "photo_url": signed_get(photo_key),
+        "created_at": item.get("created_at") or "",
         "updated_at": item.get("updated_at") or "",
         "updated_by": item.get("updated_by") or "",
         "version": as_int(item.get("version"), 1),

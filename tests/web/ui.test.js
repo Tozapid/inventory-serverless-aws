@@ -109,12 +109,15 @@ function fakeApi() {
     thumb_url: box.photo ? `/media/seed/photos/${box.photo}-thumb.jpg` : "",
     photo_url: box.photo ? `/media/seed/photos/${box.photo}.jpg` : "",
     hidden_text: box.hidden || "",
-    updated_at: "2026-09-01T10:00:00Z",
+    updated_at: box.updated || "2026-09-01T10:00:00Z",
+    created_at: box.created || "2026-09-01T10:00:00Z",
     updated_by: ADMIN.email,
     version: 1,
     urls_expire_at: "2026-09-01T11:00:00Z",
   });
-  seed.forEach((box) => {
+  // Later example boxes count as added later.
+  seed.forEach((box, index) => {
+    box.created = "2026-0" + (index + 1) + "-01T10:00:00Z";
     boxes.set(box.number, box);
     history.set(box.number, box.history.map((entry, index) => ({ id: "2026-09-01T10:00:00.000Z#0000000" + index, at: "2026-09-01T10:00:00Z", by: ADMIN.email, field: "contents", before: entry.before, after: entry.after, note: entry.note })).reverse());
   });
@@ -135,6 +138,9 @@ function fakeApi() {
           items.push({ ...card(box), history_match: true });
         }
       }
+      const sort = url.searchParams.get("sort");
+      if (sort === "updated") items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      if (sort === "created") items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return [200, { items, next_cursor: null, urls_expire_at: "2026-09-01T11:00:00Z" }];
     }
     if (route === "POST /boxes") {
@@ -150,6 +156,11 @@ function fakeApi() {
       return [200, { deleted: id }];
     }
     if (method === "GET" && hist) return [200, { items: history.get(decodeURIComponent(hist[1])) || [] }];
+    if (method === "PATCH" && one) {
+      const box = boxes.get(decodeURIComponent(one[1]));
+      Object.assign(box, { description: body.description, contents: body.contents, updated: "2026-10-10T12:00:00Z" });
+      return [200, card(box)];
+    }
     if (method === "GET" && one) {
       const box = boxes.get(decodeURIComponent(one[1]));
       return box ? [200, card(box)] : [404, { error: "Box not found" }];
@@ -375,6 +386,37 @@ test("an admin switches to everyone's recognition log", async (t) => {
   assert.equal(api.routes("GET /admin/recognition-log").length, 1);
   await clickText(page, ".log-scope button", "Mine");
   await until(async () => (await page.$$(".recognition-log .log-entry")).length === 2, "back to own log");
+});
+
+test("sorting is by number first, and the choice is kept", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row");
+  assert.equal(await page.$eval(".sort-select", (node) => node.value), "number");
+  assert.deepEqual(await rowNumbers(page), ["1", "2", "3", "4", "5", "12", "A-7"]);
+  assert.equal(api.routes("GET /boxes").at(-1).query.sort, undefined);
+
+  await page.select(".sort-select", "created");
+  await until(async () => (await rowNumbers(page))[0] === "A-7", "newest first");
+  assert.equal(api.routes("GET /boxes").at(-1).query.sort, "created");
+  assert.match(await text(page, ".box-row"), /Added /);
+
+  await page.reload();
+  await page.waitForSelector(".box-row");
+  assert.equal(await page.$eval(".sort-select", (node) => node.value), "created", "kept after a reload");
+  assert.equal(api.routes("GET /boxes").at(-1).query.sort, "created");
+
+  await page.select(".sort-select", "updated");
+  await until(async () => api.routes("GET /boxes").at(-1).query.sort === "updated", "changed sort");
+  await page.goto(ORIGIN + "/box/3");
+  await page.waitForSelector(".detail");
+  await clickText(page, "#detail button", "Edit");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.$eval("#detail form.stack textarea", (node) => { node.value = "Edited"; });
+  await clickText(page, "#detail form.stack button", "Save");
+  await until(async () => (await rowNumbers(page))[0] === "3", "the edited box comes first");
+  assert.equal(await page.$eval(".sort-select", (node) => node.value), "updated", "kept after editing");
 });
 
 test("a new box is created and opened", async (t) => {
