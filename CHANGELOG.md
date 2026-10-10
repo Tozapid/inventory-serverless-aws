@@ -13,6 +13,7 @@
 
 ### Changed
 
+- A row of the list shows the number and the name (the first line of the description) on one line, and the rest of a longer description below it, smaller and without a frame. The number plate no longer stretches across the row.
 - "Contents history" on the card is now "History", since it holds photo descriptions too.
 - The Grok key is write-only: `GET /api/settings` returns `grok_key_set` and the last four characters in `grok_key_hint` (for keys of 12 characters or more), never the key. The key field in the settings stays empty; saving it empty keeps the stored key, `remove_key: true` deletes it, and the settings have a "Delete key" button.
 - GitHub Actions on Node.js 24: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7`, `hashicorp/setup-terraform@v4`, `aws-actions/configure-aws-credentials@v6`.

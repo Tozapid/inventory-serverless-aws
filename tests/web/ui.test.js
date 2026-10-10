@@ -429,6 +429,23 @@ test("sorting is by index first, and the choice is kept", async (t) => {
   assert.equal(await page.$eval(".sort-select", (node) => node.value), "updated", "kept after editing");
 });
 
+test("a row shows the number and the name, the rest of the description below", async (t) => {
+  const api = fakeApi();
+  api.boxes.get("1").description = "Electronics: **Raspberry Pi** kit\nShelf 2, top left";
+  api.boxes.get("5").description = "";
+  const wiki = await openInventory(t, { api });
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  const rows = await page.$$eval(".box-row .box-copy", (nodes) => nodes.map((node) => ({
+    title: node.querySelector(".box-title").textContent,
+    rest: node.querySelector(".md-compact")?.textContent.trim() || "",
+  })));
+  assert.deepEqual(rows[0], { title: "1Electronics: Raspberry Pi kit", rest: "Shelf 2, top left" });
+  assert.deepEqual(rows[1], { title: "2Small hand tools", rest: "" }, "a one-line description has nothing below");
+  assert.deepEqual(rows[4], { title: "5No description", rest: "" });
+});
+
 test("a new box is created and opened", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
