@@ -46,7 +46,7 @@ class FakeS3:
     def __init__(self):
         self.versions = [{"Key": f"boxes/{n}/original/a.jpg", "VersionId": f"v{n}"} for n in range(1500)]
         self.markers = [{"Key": "boxes/x/thumb/b.jpg", "VersionId": "m1"}]
-        self.seed = [{"Key": "seed/photos/hand-tools.jpg", "VersionId": "s1"}]
+        self.seed = [{"Key": "seed/photos/toolbox.jpg", "VersionId": "s1"}]
 
     def get_paginator(self, name):
         return Pager(lambda: [{"Versions": list(self.versions) + list(self.seed), "DeleteMarkers": list(self.markers)}])
@@ -119,7 +119,7 @@ class ResetTest(unittest.TestCase):
         self.assertFalse([key for key in self.ddb.items if key == ("BOX#0", "META") or key[0].startswith("USER#")])
         self.assertEqual(result["files"], 1501)
         self.assertEqual((self.s3.versions, self.s3.markers), ([], []))
-        self.assertEqual(self.s3.seed, [{"Key": "seed/photos/hand-tools.jpg", "VersionId": "s1"}])
+        self.assertEqual(self.s3.seed, [{"Key": "seed/photos/toolbox.jpg", "VersionId": "s1"}])
         self.assertEqual(self.cognito.users, {"uuid-admin": "Admin@Example.com"})
         self.assertEqual(result["users"], {"removed": 1, "admin_recreated": False})
         self.assertIn(("password", "admin@example.com", "admin123", True), self.cognito.calls)
@@ -143,9 +143,9 @@ class ResetTest(unittest.TestCase):
         tools = meta["BOX#2"]
         self.assertEqual(self.value(tools, "gsi1pk"), "BOX")
         self.assertEqual(self.value(tools, "gsi1sk"), "n:000000000002")
-        self.assertEqual(self.value(tools, "photo_key"), "seed/photos/hand-tools.jpg")
+        self.assertEqual(self.value(tools, "photo_key"), "seed/photos/toolbox.jpg")
         self.assertEqual(self.value(tools, "updated_by"), "admin@example.com")
-        self.assertIn("pliers", self.value(tools, "search_text"), "the hidden text is searchable")
+        self.assertIn("spanners", self.value(tools, "search_text"), "the hidden text is searchable")
         self.assertEqual(self.value(meta["BOX#A-7"], "gsi1sk"), "s:a-7")
         self.assertNotIn("photo_key", meta["BOX#5"])
         box_one = meta["BOX#1"]

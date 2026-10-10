@@ -318,8 +318,8 @@ test("the example photos load and a card opens by its address", async (t) => {
   const { page } = wiki;
   await page.waitForSelector(".detail img");
   await until(() => page.$eval(".detail img", (img) => img.complete && img.naturalWidth > 0), "card photo");
-  assert.match(await text(page, ".detail"), /Small hand tools/);
-  assert.match(await text(page, ".detail"), /Needle-nose pliers/);
+  assert.match(await text(page, ".detail"), /Toolbox/);
+  assert.match(await text(page, ".detail"), /Combination wrenches/);
   assert.match(await text(page, ".detail"), /Box created/, "the note the API writes is translated");
   assert.equal(await page.evaluate(() => document.title), "Box 2 — Inventory");
   const thumbs = await page.$$eval(".box-row img", (imgs) => imgs.length);
@@ -331,9 +331,10 @@ test("search finds a box by what is in its photo", async (t) => {
   if (!wiki) return;
   const { page, api } = wiki;
   await page.waitForSelector(".box-row");
-  await page.type(".search input[type=search]", "baubles");
-  await until(async () => JSON.stringify(await rowNumbers(page)) === JSON.stringify(["3"]), "only the Christmas box");
-  assert.equal(api.routes("GET /boxes").at(-1).query.q, "baubles");
+  // "spanners" is only in the text of the toolbox photo, not in its card.
+  await page.type(".search input[type=search]", "spanners");
+  await until(async () => JSON.stringify(await rowNumbers(page)) === JSON.stringify(["2"]), "only the toolbox");
+  assert.equal(api.routes("GET /boxes").at(-1).query.q, "spanners");
 });
 
 test("search looks through the history only when asked", async (t) => {
@@ -451,7 +452,7 @@ test("a row shows the number and the name, the rest of the description below", a
     rest: node.querySelector(".md-compact")?.textContent.trim() || "",
   })));
   assert.deepEqual(rows[0], { title: "1Electronics: Raspberry Pi kit", rest: "Shelf 2, top left" });
-  assert.deepEqual(rows[1], { title: "2Small hand tools", rest: "" }, "a one-line description has nothing below");
+  assert.deepEqual(rows[1], { title: "2Toolbox", rest: "" }, "a one-line description has nothing below");
   assert.deepEqual(rows[4], { title: "5No description", rest: "" });
 });
 
@@ -472,6 +473,88 @@ test("the photo view follows the list order row by row", async (t) => {
   assert.equal(new Set(tops).size, 1, "the first three tiles share a row");
   await page.setViewport({ width: 390, height: 844 });
   assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
+});
+
+test("keyboard: I edits, ⌘Enter saves, J and L move through the list", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/1" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row.selected");
+  await page.waitForSelector("#detail .detail-tools");
+  const path = () => page.evaluate(() => location.pathname);
+
+  await page.keyboard.press("KeyL");
+  await until(async () => (await path()) === "/box/2", "L opens the next box");
+  await page.keyboard.press("KeyL");
+  await until(async () => (await path()) === "/box/3", "and the one after");
+  await page.keyboard.press("KeyJ");
+  await until(async () => (await path()) === "/box/2", "J goes back");
+  await page.waitForFunction(() => document.querySelector("#detail .plate")?.textContent === "2");
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  assert.equal(await page.evaluate(() => document.activeElement.tagName), "TEXTAREA", "the description is focused");
+  await page.keyboard.press("KeyL");
+  assert.equal(await path(), "/box/2", "letters type while editing");
+  await page.keyboard.down("Meta");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Meta");
+  await until(() => api.routes("PATCH /boxes/2").length === 1, "⌘Enter saves");
+  await until(async () => !(await page.$("#detail form.stack")), "the card leaves editing");
+  assert.match(api.routes("PATCH /boxes/2")[0].body.description, /l/);
+
+  await page.click(".search input[type=search]");
+  await page.keyboard.press("KeyL");
+  assert.equal(await path(), "/box/2", "letters in the search field stay letters");
+});
+
+test("keyboard: Esc leaves editing from a field, asking if the text changed", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/2" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  const asked = [];
+  page.on("dialog", (dialog) => asked.push(dialog.message()));
+  await page.waitForSelector("#detail .detail-tools");
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("#detail form.stack")), "no changes: Esc leaves at once");
+  assert.deepEqual(asked, []);
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.keyboard.type(" and more");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("#detail form.stack")), "changes: asked, then left");
+  assert.deepEqual(asked, ["Discard unsaved changes?"]);
+  assert.equal(api.routes("PATCH /boxes/2").length, 0, "nothing saved");
+
+  await page.keyboard.press("Escape");
+  await until(async () => (await page.evaluate(() => location.pathname)) === "/", "the next Esc closes the card");
+
+  await clickText(page, "button", "New box");
+  await page.waitForSelector("form.composer input");
+  await page.keyboard.press("Escape");
+  assert.ok(await page.$("form.composer"), "the empty form stays until focused");
+  await page.type("form.composer input", "31");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("form.composer")), "Esc closes the new box form");
+  assert.deepEqual(asked, ["Discard unsaved changes?", "Discard unsaved changes?"]);
+});
+
+test("keyboard: Ctrl+Enter creates a new box", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector(".box-row");
+  await clickText(page, "button", "New box");
+  await page.waitForSelector("form.composer input");
+  await page.type("form.composer input", "30");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  await until(() => api.boxes.has("30"), "box created");
 });
 
 test("a new box is created and opened", async (t) => {
@@ -598,7 +681,7 @@ test("labels: size, font and text are chosen and kept", async (t) => {
   await page.select(".label-settings select", "serif");
   await clickText(page, ".label-show label", "Name");
   assert.equal(await text(page, ".label-settings .hint"), "On an A4 sheet: 4 × 9 = 36");
-  assert.equal(await text(page, ".label-preview .label-name"), "Electronics: Raspberry Pi kit");
+  assert.equal(await text(page, ".label-preview .label-name"), "Drives and storage");
   assert.ok(await page.$(".label-preview .label.wide"), "a wide label puts the text beside the code");
 
   await page.reload();

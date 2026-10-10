@@ -532,6 +532,12 @@
     return match ? match[1] : null;
   }
 
+  // Shortcuts: ⌘Enter (Ctrl+Enter) saves the card or creates the box; I, J and
+  // L sit like arrow keys: I edits the open card, J opens the previous box of
+  // the list and L the next one. Esc leaves editing, asking first if anything
+  // was changed, and then closes the card.
+  const SAVE_KEYS = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘Enter" : "Ctrl+Enter";
+
   function plainClick(event) {
     return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
   }
@@ -699,7 +705,7 @@
       markdownField(t("Содержимое"), contents, el("div", { class: "md" })),
       photo.node,
       el("div", { class: "row-actions" }, [
-        el("button", { class: "primary", type: "submit" }, t("Создать")),
+        el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Создать")),
         el("button", { class: "ghost", type: "button", onclick: toggleComposer }, t("Отмена")),
       ]),
       error,
@@ -789,7 +795,13 @@
     return parts;
   }
 
+  // Each opening gets a ticket; only the latest one may draw the card. Going
+  // 2 → 3 → 2 quickly leaves the first answer for 2 in flight, and without the
+  // ticket it would redraw the card over an edit started since.
+  let openTicket = 0;
+
   async function openBox(number, mode) {
+    const ticket = ++openTicket;
     if (state.selected !== number) {
       state.editing = false;
       state.showHidden = false;
@@ -807,12 +819,12 @@
         api("/boxes/" + encodeURIComponent(number)),
         api("/boxes/" + encodeURIComponent(number) + "/history"),
       ]);
-      if (state.selected !== number) return;
+      if (ticket !== openTicket) return;
       state.detail = card;
       state.history = history.items || [];
       renderDetail();
     } catch (error) {
-      if (state.selected !== number) return;
+      if (ticket !== openTicket) return;
       state.detail = null;
       state.history = [];
       showMissingCard(number, error.message);
@@ -929,10 +941,8 @@
         state.editing ? null : el("button", {
           class: "primary",
           type: "button",
-          onclick: () => {
-            state.editing = true;
-            renderDetail();
-          },
+          title: "I",
+          onclick: startEditing,
         }, t("Редактировать")),
         el("button", {
           class: "ghost",
@@ -1053,7 +1063,7 @@
         el("label", {}, [t("Содержимое, можно с markdown"), contents]),
         el("label", {}, [t("Комментарий к изменению содержимого"), note]),
         el("div", { class: "row-actions" }, [
-          el("button", { class: "primary", type: "submit" }, t("Сохранить")),
+          el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Сохранить")),
           el("button", {
             class: "ghost",
             type: "button",
@@ -2216,7 +2226,52 @@
     }
   });
 
+  // Only the card that is shown: while the next one loads, I waits.
+  function startEditing() {
+    if (!state.detail || state.detail.number !== state.selected || state.editing) return;
+    state.editing = true;
+    renderDetail();
+    document.querySelector("#detail form.stack textarea")?.focus();
+  }
+
+  // The next (step 1) or the previous (-1) box of the list as it is shown,
+  // loading the next page at the end of the loaded ones.
+  async function stepBox(step) {
+    let index = state.items.findIndex((item) => item.number === state.selected);
+    if (index === -1) index = step > 0 ? -1 : state.items.length;
+    if (index + step >= state.items.length && state.cursor) await loadBoxes(true);
+    const item = state.items[index + step];
+    if (!item) return;
+    await openBox(item.number);
+    document.querySelector(".box-row.selected")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // Whether the card being edited has changes that Esc would throw away.
+  function editChanged() {
+    const form = document.querySelector("#detail form.stack");
+    const card = state.detail;
+    if (!form || !card) return false;
+    const [description, contents] = form.querySelectorAll("textarea");
+    const note = form.querySelector("input:not([type=file])");
+    return description.value !== (card.description || "")
+      || contents.value !== (card.contents || "")
+      || Boolean(note && note.value.trim());
+  }
+
+  function formHasText(form) {
+    return [...form.querySelectorAll("input, textarea")].some((field) => (field.type === "file" ? field.files.length : field.value.trim()));
+  }
+
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+      const form = event.target.closest?.("form.stack, form.composer")
+        || (state.editing ? document.querySelector("#detail form.stack") : null);
+      if (form && !document.querySelector(".dialog-wrap")) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+      return;
+    }
     if (event.key === "Escape") {
       if (state.lightbox >= 0) {
         closeLightbox();
@@ -2227,19 +2282,39 @@
         dialog.remove();
         return;
       }
-      if (state.selected && !(event.target && event.target.closest && event.target.closest("textarea, input"))) {
-        if (state.editing) {
+      // Esc works in the fields too: the new box form closes, an edit ends.
+      const composer = event.target.closest?.("form.composer");
+      if (composer) {
+        if (!formHasText(composer) || window.confirm(t("Отменить несохранённые изменения?"))) {
+          composerOpen = false;
+          renderCatalog();
+        }
+        return;
+      }
+      if (state.editing) {
+        if (!editChanged() || window.confirm(t("Отменить несохранённые изменения?"))) {
           state.editing = false;
           renderDetail();
-        } else {
-          closeDetail();
         }
+        return;
       }
+      if (state.selected && !event.target.closest?.("input, textarea, select")) closeDetail();
       return;
     }
-    if (event.target.closest("input, textarea")) return;
+    if (event.target.closest("input, textarea, select, [contenteditable]")) return;
     if (event.key === "ArrowRight" && state.lightbox >= 0) stepLightbox(1);
     if (event.key === "ArrowLeft" && state.lightbox >= 0) stepLightbox(-1);
+    // Letters by their place on the keyboard, so that they work in any layout.
+    // Not while a card is being edited: moving on would drop the text.
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    if (state.lightbox >= 0 || document.querySelector(".dialog-wrap") || state.editing) return;
+    if (event.code === "KeyI" && state.detail) {
+      event.preventDefault();
+      startEditing();
+    } else if (event.code === "KeyJ" || event.code === "KeyL") {
+      event.preventDefault();
+      stepBox(event.code === "KeyL" ? 1 : -1);
+    }
   });
 
   async function boot() {

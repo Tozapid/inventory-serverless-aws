@@ -24,6 +24,7 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 - Optional two-step sign-in with an authenticator app (TOTP), turned on, switched to another app or off in the settings by each user.
 - Labels to print on A4 (Settings → Labels): a QR code linking to the card with the box number and/or name in the largest letters that fit; the label size (30 × 50 mm by default) and the font are chosen there and remembered.
 - Settings for administrators: invite, disable and delete users, see who has two-step sign-in and reset it for a lost phone.
+- Keyboard: ⌘Enter / Ctrl+Enter saves a card, I edits it, J and L go to the previous and the next box, Esc leaves editing (asking if anything changed) or closes the card.
 - Interface in English, Russian, French and Italian, following the system language.
 
 The page builds DOM nodes itself: text and Markdown never become HTML that runs.
@@ -133,7 +134,7 @@ With `recognition = true`, the settings get a Recognition tab where each user st
 
 The key is write-only: the page only learns that a key is saved and its last four characters. Below the key, the tab shows the user's recognition log: the last 50 attempts over 30 days, with what Grok answered when it failed. Administrators can switch it to everyone's attempts.
 
-It is off in the public demo for a reason: everybody signs in as the same administrator, so a key saved there would be spent by the next visitor; the key cannot be read back, but anyone signed in as that admin can upload photos on it. The example boxes carry hidden text of their own, so searching for `baubles` or `pliers` still shows what recognition does.
+It is off in the public demo for a reason: everybody signs in as the same administrator, so a key saved there would be spent by the next visitor; the key cannot be read back, but anyone signed in as that admin can upload photos on it. The example boxes carry hidden text of their own, so searching for `spanners` or `rolls` still shows what recognition does.
 
 ## Repository layout
 
@@ -177,14 +178,3 @@ cd tests/web && npm ci && npm test
 - Everyone signed in sees and edits every box; there are no per-box permissions.
 - Search scans the table with a filter, which is fine for thousands of boxes, not for millions.
 - The Cognito invitation email has one language for the whole pool (English).
-
-## Example photos
-
-All CC0, resized for the demo:
-
-| File | Photo | Author |
-| --- | --- | --- |
-| `raspberry-pi.jpg` | [Raspberry Pi Single Board Computer in Shipping Box with Accessories](https://commons.wikimedia.org/w/index.php?curid=20047235) | GR8DAN, Wikimedia Commons |
-| `hand-tools.jpg` | [Transparent plastic box with tools - 28 x 10 cm](https://commons.wikimedia.org/w/index.php?curid=62434635) | Fructibus, Wikimedia Commons |
-| `ornaments.jpg` | [Christmas Ornaments](https://stocksnap.io/photo/christmas-ornaments-Y4LYRYS38Y) | Copper and Wild, StockSnap |
-| `tool-cases.jpg` | [Systainer toolbox stack](https://commons.wikimedia.org/w/index.php?curid=71110709) | Paul Sladen, Wikimedia Commons |

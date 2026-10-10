@@ -2,61 +2,61 @@
   "boxes": [
     {
       "number": "1",
-      "photo": "raspberry-pi",
-      "description": "Electronics: **Raspberry Pi** kit",
-      "contents": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m\n- 32 GB microSD card\n- USB power supply, 5 V 2.5 A",
-      "hidden": "Cardboard Raspberry Pi box with the raspberry logo, a black HDMI cable with a yellow label, a small black case, red and white bubble wrap.",
+      "photo": "drives",
+      "description": "Drives and storage",
+      "contents": "- SanDisk SATA SSD, 1.7 TB\n- ORICO NVMe enclosure, USB-C\n- Transcend StoreJet external hard drive\n- SATA and USB cables",
+      "hidden": "Clear plastic box with a black SanDisk SSD with a white label, a transparent ORICO enclosure with a black heatsink, a dark grey StoreJet drive with a green stripe, white cables tied with string.",
       "history": [
         {
           "days": 40,
           "before": "",
-          "after": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m",
+          "after": "- Transcend StoreJet external hard drive\n- SATA and USB cables",
           "note": "Создание коробки"
         },
         {
           "days": 12,
-          "before": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m",
-          "after": "- Raspberry Pi 3 Model B, boxed\n- HDMI cable with Ethernet, 1.8 m\n- 32 GB microSD card\n- USB power supply, 5 V 2.5 A",
-          "note": "Added the SD card and the charger"
+          "before": "- Transcend StoreJet external hard drive\n- SATA and USB cables",
+          "after": "- SanDisk SATA SSD, 1.7 TB\n- ORICO NVMe enclosure, USB-C\n- Transcend StoreJet external hard drive\n- SATA and USB cables",
+          "note": "Added the SSD and the NVMe enclosure"
         }
       ]
     },
     {
       "number": "2",
-      "photo": "hand-tools",
-      "description": "Small hand tools",
-      "contents": "- Side cutters\n- Needle-nose pliers\n- Wire stripper\n\nClear plastic box, 28 × 10 cm.",
-      "hidden": "Transparent plastic box with orange-handled pliers and wire cutters on a dark table.",
+      "photo": "toolbox",
+      "description": "Toolbox",
+      "contents": "- Combination wrenches, 10–19 mm\n- 1/2\" sockets\n- Wooden mitre box\n- Door hinges and corner brackets\n- Scythe sharpening stone",
+      "hidden": "Open black and yellow plastic toolbox with chrome spanners and socket heads, a wooden mitre box, galvanised hinges in blue Prakker bags, black felt pads and a scythe stone.",
       "history": [
         {
           "days": 30,
           "before": "",
-          "after": "- Side cutters\n- Needle-nose pliers\n- Wire stripper\n\nClear plastic box, 28 × 10 cm.",
+          "after": "- Combination wrenches, 10–19 mm\n- 1/2\" sockets\n- Wooden mitre box\n- Door hinges and corner brackets\n- Scythe sharpening stone",
           "note": "Создание коробки"
         }
       ]
     },
     {
       "number": "3",
-      "photo": "ornaments",
-      "description": "Christmas decorations",
-      "contents": "- 25 glass baubles, pastel\n- Tree topper star\n- Two strings of warm white lights\n\n*Fragile — keep on the top shelf.*",
-      "hidden": "Square cardboard tray with 25 glittery pastel Christmas baubles in pink, gold and silver.",
+      "photo": "label-printer",
+      "description": "Label printer",
+      "contents": "- NIIMBOT B1 label printer\n- Label tapes 50 × 30 mm (×3)\n- Clear label tape\n- USB-C cable\n\n*For the box labels.*",
+      "hidden": "Clear plastic box with a dark blue NIIMBOT printer and four rolls of white, yellow and transparent labels.",
       "history": [
         {
           "days": 300,
           "before": "",
-          "after": "- 25 glass baubles, pastel\n- Tree topper star\n- Two strings of warm white lights\n\n*Fragile — keep on the top shelf.*",
+          "after": "- NIIMBOT B1 label printer\n- Label tapes 50 × 30 mm (×3)\n- Clear label tape\n- USB-C cable\n\n*For the box labels.*",
           "note": "Создание коробки"
         }
       ]
     },
     {
       "number": "4",
-      "photo": "tool-cases",
+      "photo": null,
       "description": "Power tool cases",
       "contents": "Stack of four cases, top to bottom:\n\n1. Cordless drill and bits\n2. Jigsaw and blades\n3. Orbital sander, discs 80–240\n4. Screws and wall plugs, sorted",
-      "hidden": "Stack of yellow, blue and grey Systainer plastic tool cases with latches and a handle on top.",
+      "hidden": "",
       "history": [
         {
           "days": 60,
@@ -76,10 +76,10 @@
     },
     {
       "number": "12",
-      "photo": null,
+      "photo": "cables",
       "description": "Cables and chargers",
-      "contents": "- USB-C to USB-C, 2 m (×3)\n- Lightning cables (×2)\n- DisplayPort to HDMI adapter\n- Old laptop charger, 65 W",
-      "hidden": "",
+      "contents": "- USB-C to USB-C, 2 m (×3)\n- Ethernet cables (×4)\n- Power adapters with EU plugs\n- Old laptop chargers, 45 and 65 W\n- Plug adapter",
+      "hidden": "Clear plastic box full of tangled white and black cables, black power adapters with European plugs, white laptop chargers, a blue velcro tie and zip bags.",
       "history": []
     },
     {
