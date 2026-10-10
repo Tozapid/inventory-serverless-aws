@@ -1,10 +1,13 @@
 import base64
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -336,13 +339,254 @@ class RecognitionSwitchTest(unittest.TestCase):
     def test_settings_do_not_hand_out_keys_when_off(self):
         status, body = call("GET", "/api/settings")
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"recognition": False, "grok_api_key": "", "grok_model": ""})
+        self.assertEqual(body, {"recognition": False, "grok_key_set": False, "grok_key_hint": "", "grok_model": ""})
 
     def test_a_key_cannot_be_saved_when_off(self):
         self.assertEqual(call("PUT", "/api/settings", {"grok_api_key": "xai-secret", "grok_model": "grok-4.7"})[0], 403)
 
     def test_uploads_do_not_queue_recognition_when_off(self):
         self.assertFalse(lambda_app.recognition_configured("person@example.com"))
+
+
+class FakeS3:
+    def get_object(self, Bucket, Key):
+        return {"Body": io.BytesIO(b"jpeg")}
+
+
+class RecognitionLogTest(unittest.TestCase):
+    KEY = "xai-secret-key-0123456789"
+    THUMB = "boxes/5/thumb/" + "b" * 32 + ".jpg"
+
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", MEDIA_BUCKET="media")
+        self.table = lambda_app._table = ScanTable([
+            dict(meta("5", "Кабели"), thumb_key=self.THUMB),
+            {"pk": "USER#owner@example.com", "sk": "SETTINGS", "grok_api_key": self.KEY, "grok_model": "grok-4.7"},
+        ])
+        lambda_app._s3 = FakeS3()
+        self.saved = (lambda_app.transact, urllib.request.urlopen)
+        lambda_app.transact = lambda actions: None
+
+    def tearDown(self):
+        lambda_app.transact, urllib.request.urlopen = self.saved
+        lambda_app._table = None
+        lambda_app._s3 = None
+
+    def answer(self, body):
+        class Reply(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        urllib.request.urlopen = lambda request, timeout: Reply(json.dumps(body).encode())
+
+    def fail(self, code, body):
+        def urlopen(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, code, "error", {}, io.BytesIO(body.encode()))
+
+        urllib.request.urlopen = urlopen
+
+    def log(self):
+        status, body = call("GET", "/api/settings/recognition-log", email="owner@example.com")
+        self.assertEqual(status, 200)
+        return body["items"]
+
+    def test_a_success_is_logged(self):
+        self.answer({"output": [{"type": "message", "content": [{"type": "output_text", "text": "синие провода"}]}]})
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        [entry] = self.log()
+        self.assertEqual((entry["status"], entry["number"], entry["model"], entry["chars"]), ("ok", "5", "grok-4.7", 13))
+
+    def test_what_grok_answered_is_kept_without_the_key(self):
+        self.fail(400, '{"error": "Model grok-4.7 not found for key xai-secret-key-0123456789"}')
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        [entry] = self.log()
+        self.assertEqual((entry["status"], entry["message"]), ("error", "Сервис распознавания не принял фотографию"))
+        self.assertIn("HTTP 400", entry["detail"])
+        self.assertIn("not found", entry["detail"])
+        logged = [row for (pk, sk), row in self.table.rows.items() if sk.startswith("RECOG#")]
+        self.assertNotIn(self.KEY, json.dumps(logged, ensure_ascii=False, default=str))
+
+    def test_an_empty_answer_says_why(self):
+        self.answer({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output": [{"type": "reasoning"}]})
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        [entry] = self.log()
+        self.assertEqual(entry["status"], "error")
+        self.assertIn("max_output_tokens", entry["detail"])
+
+    def test_a_replaced_photo_is_skipped(self):
+        lambda_app.finish_recognition("5", "owner@example.com", "boxes/5/thumb/" + "c" * 32 + ".jpg", "ru")
+        [entry] = self.log()
+        self.assertEqual((entry["status"], entry["message"]), ("skipped", "Фотографию заменили до распознавания"))
+
+    def test_an_attempt_that_never_ended_shows_as_lost(self):
+        self.table.put_item({"pk": "USER#owner@example.com", "sk": "RECOG#2026-01-01T00:00:00.000Z#00000000",
+                             "number": "5", "status": "running", "started_at": "2026-01-01T00:00:00.000Z"})
+        status, body = call("GET", "/api/settings/recognition-log", email="owner@example.com")
+        [entry] = body["items"]
+        self.assertEqual(entry["status"], "lost")
+        self.assertEqual(lambda_app.translate("en", "Распознавание не завершилось: функцию остановили по времени или из-за сбоя"),
+                         "Recognition did not finish: the function was stopped by its time limit or a failure")
+
+    def test_each_user_sees_only_their_own_log(self):
+        self.fail(500, "boom")
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        self.assertEqual(call("GET", "/api/settings/recognition-log", email="other@example.com")[1]["items"], [])
+
+    def test_an_admin_sees_everyones_log(self):
+        self.fail(500, "boom")
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        lambda_app.finish_recognition("5", "guest@example.com", self.THUMB, "ru")
+        os.environ["ADMIN_GROUP"] = "admins"
+        self.assertEqual(call("GET", "/api/admin/recognition-log", email="owner@example.com")[0], 403)
+        status, body = call("GET", "/api/admin/recognition-log", email="boss@example.com", groups="[admins]")
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(item["user"] for item in body["items"]), ["guest@example.com", "owner@example.com"])
+        self.assertEqual(len(call("GET", "/api/boxes", email="owner@example.com")[1]["items"]), 1, "the box list stays boxes only")
+
+    def test_entries_expire(self):
+        self.fail(500, "boom")
+        lambda_app.finish_recognition("5", "owner@example.com", self.THUMB, "ru")
+        [row] = [row for (pk, sk), row in self.table.rows.items() if sk.startswith("RECOG#")]
+        self.assertGreater(row["expires_at"], datetime.now(timezone.utc).timestamp() + 29 * 86400)
+
+
+class HistoryDeleteTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", ADMIN_GROUP="admins")
+        table = lambda_app._table = ScanTable([
+            meta("7", "Лампы"),
+            lambda_app.history_item("7", "", "Лампы", "2026-09-01T10:00:00.000Z", "a@example.com", ""),
+            lambda_app.history_item("7", "", "Ошибка", "2026-09-02T10:00:00.000Z", "a@example.com", ""),
+        ])
+
+        def delete_item(Key, ConditionExpression=None):
+            if (Key["pk"], Key["sk"]) not in table.rows:
+                raise ClientError("ConditionalCheckFailedException")
+            del table.rows[(Key["pk"], Key["sk"])]
+
+        table.delete_item = delete_item
+        self.table = table
+
+    def tearDown(self):
+        lambda_app._table = None
+
+    def ids(self):
+        return [item["id"] for item in call("GET", "/api/boxes/7/history")[1]["items"]]
+
+    def delete(self, entry_id, groups="[admins]"):
+        return call("DELETE", "/api/boxes/7/history/" + entry_id, groups=groups)
+
+    def test_an_admin_deletes_one_entry(self):
+        newest, oldest = self.ids()
+        self.assertTrue(newest.startswith("2026-09-02T10:00:00.000Z#"))
+        self.assertEqual(self.delete(newest)[0], 200)
+        self.assertEqual(self.ids(), [oldest])
+        self.assertIn(("BOX#7", "META"), self.table.rows, "the card stays")
+
+    def test_others_cannot_delete(self):
+        entry = self.ids()[0]
+        self.assertEqual(self.delete(entry, groups=None)[0], 403)
+        self.assertEqual(self.delete(entry, groups="[readers]")[0], 403)
+        self.assertEqual(len(self.ids()), 2)
+
+    def test_unknown_or_malformed_entry(self):
+        self.assertEqual(self.delete("2026-01-01T00:00:00.000Z#00000000")[0], 404)
+        self.assertEqual(self.delete("META")[0], 400)
+        self.assertEqual(self.delete("2026-01-01T00:00:00.000Z#0000000g")[0], 400)
+
+
+class TurnedPhotoTest(unittest.TestCase):
+    ORIGINAL = "boxes/5/original/" + "a" * 32 + ".jpg"
+    THUMB = "boxes/5/thumb/" + "b" * 32 + ".jpg"
+
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", MEDIA_BUCKET="media")
+        lambda_app._table = ScanTable([meta("5", "Кабели", "Синие провода")])
+        self.written = []
+        self.queued = []
+        names = ("transact", "head_image", "cleanup_prefix", "recognition_configured", "queue_recognition")
+        self.saved = {name: getattr(lambda_app, name) for name in names}
+        lambda_app.transact = self.written.extend
+        lambda_app.head_image = lambda key, limit: {"ContentType": "image/jpeg"}
+        lambda_app.cleanup_prefix = lambda number, keep: None
+        lambda_app.recognition_configured = lambda who: True
+        lambda_app.queue_recognition = lambda *args: self.queued.append(args)
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(lambda_app, name, value)
+        lambda_app._table = None
+
+    def complete(self, **extra):
+        status, body = call("POST", "/api/boxes/5/photo/complete", dict(original_key=self.ORIGINAL, thumb_key=self.THUMB, **extra))
+        self.assertEqual(status, 200)
+        update = self.written[0]["Update"]["ExpressionAttributeValues"]
+        return body, update[":h"]["S"], [action for action in self.written if "Put" in action]
+
+    def test_a_turned_photo_keeps_its_description(self):
+        body, hidden, history = self.complete(keep_description=True)
+        self.assertEqual((body["hidden_text"], hidden), ("Синие провода", "Синие провода"))
+        self.assertFalse(body["recognition_pending"])
+        self.assertEqual((self.queued, history), ([], []))
+
+    def test_a_new_photo_is_recognized_again(self):
+        body, hidden, history = self.complete()
+        self.assertEqual((body["hidden_text"], hidden), ("", ""))
+        self.assertTrue(body["recognition_pending"])
+        self.assertEqual(len(history), 1)
+
+
+class SettingsTable:
+    def __init__(self):
+        self.items = {}
+
+    def get_item(self, Key):
+        item = self.items.get((Key["pk"], Key["sk"]))
+        return {"Item": dict(item)} if item else {}
+
+    def put_item(self, Item):
+        self.items[(Item["pk"], Item["sk"])] = dict(Item)
+
+
+class GrokKeyTest(unittest.TestCase):
+    KEY = "xai-0123456789abcdefWXYZ"
+
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes")
+        self.table = lambda_app._table = SettingsTable()
+
+    def tearDown(self):
+        lambda_app._table = None
+
+    def saved_key(self):
+        return self.table.items[("USER#person@example.com", "SETTINGS")]["grok_api_key"]
+
+    def test_the_key_never_leaves_the_api(self):
+        status, body = call("PUT", "/api/settings", {"grok_api_key": self.KEY, "grok_model": "grok-4.7"})
+        self.assertEqual(status, 200)
+        self.assertNotIn(self.KEY, json.dumps(body))
+        status, body = call("GET", "/api/settings")
+        self.assertEqual(body, {"recognition": True, "grok_key_set": True, "grok_key_hint": "WXYZ", "grok_model": "grok-4.7"})
+        self.assertNotIn(self.KEY, json.dumps(body))
+
+    def test_an_empty_key_keeps_the_saved_one(self):
+        call("PUT", "/api/settings", {"grok_api_key": self.KEY, "grok_model": "grok-4.7"})
+        call("PUT", "/api/settings", {"grok_api_key": "", "grok_model": "grok-5"})
+        self.assertEqual(self.saved_key(), self.KEY)
+        self.assertEqual(call("GET", "/api/settings")[1]["grok_model"], "grok-5")
+
+    def test_remove_key_deletes_it(self):
+        call("PUT", "/api/settings", {"grok_api_key": self.KEY, "grok_model": "grok-4.7"})
+        status, body = call("PUT", "/api/settings", {"remove_key": True, "grok_model": "grok-4.7"})
+        self.assertEqual(self.saved_key(), "")
+        self.assertFalse(body["grok_key_set"])
+
+    def test_a_short_key_gets_no_hint(self):
+        call("PUT", "/api/settings", {"grok_api_key": "short", "grok_model": "grok-4.7"})
+        self.assertEqual(call("GET", "/api/settings")[1]["grok_key_hint"], "")
 
 
 class ScanTable:
@@ -358,14 +602,23 @@ class ScanTable:
         row = self.rows.get((Key["pk"], Key["sk"]))
         return {"Item": row} if row else {}
 
-    def query(self, KeyConditionExpression, **kwargs):
-        pk = KeyConditionExpression.get_expression()["values"][0].get_expression()["values"][1]
-        rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith("HIST#")]
+    def put_item(self, Item):
+        self.rows[(Item["pk"], Item["sk"])] = dict(Item)
+
+    def query(self, KeyConditionExpression, IndexName=None, **kwargs):
+        if IndexName:
+            name, value = KeyConditionExpression.get_expression()["values"]
+            rows = [row for row in self.rows.values() if row.get(name.name) == value]
+            return {"Items": sorted(rows, key=lambda row: row.get("gsi1sk") or "", reverse=True)}
+        pk_part, sk_part = KeyConditionExpression.get_expression()["values"]
+        pk = pk_part.get_expression()["values"][1]
+        prefix = sk_part.get_expression()["values"][1]
+        rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith(prefix)]
         return {"Items": sorted(rows, key=lambda row: row["sk"], reverse=True)}
 
 
 def meta(number, contents, hidden=""):
-    return {"pk": "BOX#" + number, "sk": "META", "number": number, "gsi1sk": lambda_app.sort_key(number),
+    return {"pk": "BOX#" + number, "sk": "META", "number": number, "gsi1pk": "BOX", "gsi1sk": lambda_app.sort_key(number),
             "description": "", "contents": contents, "hidden_text": hidden, "thumb_key": "",
             "search_text": lambda_app.build_search(number, "", contents, hidden), "version": 1}
 
@@ -408,7 +661,7 @@ class HiddenTextHistoryTest(unittest.TestCase):
         self.table = lambda_app._table = ScanTable([dict(meta("5", "Кабели", "Старое описание"), thumb_key="boxes/5/thumb/new.jpg")])
         self.saved = (lambda_app.transact, lambda_app.describe_photo)
         lambda_app.transact = self.written.extend
-        lambda_app.describe_photo = lambda user, key, lang: "Новое описание"
+        lambda_app.describe_photo = lambda user, key, lang, log=None: "Новое описание"
 
     def tearDown(self):
         lambda_app.transact, lambda_app.describe_photo = self.saved
