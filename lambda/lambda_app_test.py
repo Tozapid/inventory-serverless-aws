@@ -605,22 +605,79 @@ class ScanTable:
     def put_item(self, Item):
         self.rows[(Item["pk"], Item["sk"])] = dict(Item)
 
-    def query(self, KeyConditionExpression, IndexName=None, **kwargs):
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeValues, **kwargs):
+        # Only the created_at fill-in uses this.
+        row = self.rows[(Key["pk"], Key["sk"])]
+        row.setdefault("created_at", ExpressionAttributeValues[":c"])
+
+    def query(self, KeyConditionExpression, IndexName=None, ScanIndexForward=False, Limit=None, **kwargs):
         if IndexName:
             name, value = KeyConditionExpression.get_expression()["values"]
             rows = [row for row in self.rows.values() if row.get(name.name) == value]
-            return {"Items": sorted(rows, key=lambda row: row.get("gsi1sk") or "", reverse=True)}
-        pk_part, sk_part = KeyConditionExpression.get_expression()["values"]
-        pk = pk_part.get_expression()["values"][1]
-        prefix = sk_part.get_expression()["values"][1]
-        rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith(prefix)]
-        return {"Items": sorted(rows, key=lambda row: row["sk"], reverse=True)}
+            rows = sorted(rows, key=lambda row: row.get("gsi1sk") or "", reverse=not ScanIndexForward)
+        else:
+            pk_part, sk_part = KeyConditionExpression.get_expression()["values"]
+            pk = pk_part.get_expression()["values"][1]
+            prefix = sk_part.get_expression()["values"][1]
+            rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith(prefix)]
+            rows = sorted(rows, key=lambda row: row["sk"], reverse=not ScanIndexForward)
+        return {"Items": rows[:Limit] if Limit else rows}
 
 
 def meta(number, contents, hidden=""):
     return {"pk": "BOX#" + number, "sk": "META", "number": number, "gsi1pk": "BOX", "gsi1sk": lambda_app.sort_key(number),
             "description": "", "contents": contents, "hidden_text": hidden, "thumb_key": "",
             "search_text": lambda_app.build_search(number, "", contents, hidden), "version": 1}
+
+
+class SortTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes")
+        rows = []
+        # Box 1: oldest, changed last. Box 2: no created_at, history says when.
+        # Box 3: no created_at and no history. Box 10: newest.
+        for number, created, updated in (("1", "2026-01-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"),
+                                         ("2", None, "2026-03-01T00:00:00.000Z"),
+                                         ("3", None, "2026-05-01T00:00:00.000Z"),
+                                         ("10", "2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z")):
+            row = dict(meta(number, "Кабели " + number), updated_at=updated)
+            if created:
+                row["created_at"] = created
+            rows.append(row)
+        rows.append(lambda_app.history_item("2", "", "Кабели 2", "2026-02-01T00:00:00.000Z", "a@example.com", ""))
+        rows.append(lambda_app.history_item("2", "Кабели 2", "Кабели 2!", "2026-02-15T00:00:00.000Z", "a@example.com", ""))
+        self.table = lambda_app._table = ScanTable(rows)
+
+    def tearDown(self):
+        lambda_app._table = None
+
+    def numbers(self, **params):
+        status, body = call("GET", "/api/boxes", params=params)
+        self.assertEqual(status, 200)
+        return [item["number"] for item in body["items"]], body["next_cursor"]
+
+    def test_number_is_the_default(self):
+        self.assertEqual(self.numbers()[0], ["1", "2", "3", "10"])
+        self.assertEqual(self.numbers(sort="nonsense")[0], ["1", "2", "3", "10"])
+
+    def test_last_changed_first(self):
+        self.assertEqual(self.numbers(sort="updated")[0], ["1", "10", "3", "2"])
+
+    def test_last_added_first_with_dates_filled_in(self):
+        self.assertEqual(self.numbers(sort="created")[0], ["10", "3", "2", "1"])
+        self.assertEqual(self.table.rows[("BOX#2", "META")]["created_at"], "2026-02-01T00:00:00.000Z", "the first history entry")
+        self.assertEqual(self.table.rows[("BOX#3", "META")]["created_at"], "2026-05-01T00:00:00.000Z", "the last change")
+        status, body = call("GET", "/api/boxes", params={"sort": "created"})
+        self.assertEqual(body["items"][0]["created_at"], "2026-08-01T00:00:00.000Z")
+
+    def test_pages_follow_the_sort(self):
+        first, cursor = self.numbers(sort="updated", limit="3")
+        self.assertEqual(first, ["1", "10", "3"])
+        rest, end = self.numbers(sort="updated", limit="3", cursor=cursor)
+        self.assertEqual((rest, end), (["2"], None))
+
+    def test_history_search_is_sorted_too(self):
+        self.assertEqual(self.numbers(q="кабели", history="1", sort="updated")[0], ["1", "10", "3", "2"])
 
 
 class HistorySearchTest(unittest.TestCase):

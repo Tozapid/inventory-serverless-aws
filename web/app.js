@@ -3,11 +3,16 @@
   const I18n = window.InventoryI18n;
   const t = I18n.t;
   const root = document.getElementById("root");
+  // The chosen order stays in this browser. Storage may be off (a private
+  // window), and then the list simply starts by number.
+  const SORT_KEY = "inventory-sort";
+  const SORTS = ["number", "updated", "created"];
   const state = {
     email: "",
     mode: "list",
     query: "",
     searchHistory: false,
+    sort: savedSort(),
     items: [],
     cursor: null,
     loading: false,
@@ -21,6 +26,27 @@
     urlsExpireAt: null,
   };
   let pool = null;
+
+
+  function savedSort() {
+    try {
+      const value = window.localStorage.getItem(SORT_KEY);
+      return SORTS.includes(value) ? value : "number";
+    } catch (error) {
+      return "number";
+    }
+  }
+
+  function setSort(value) {
+    state.sort = SORTS.includes(value) ? value : "number";
+    try {
+      window.localStorage.setItem(SORT_KEY, state.sort);
+    } catch (error) {
+      // Kept for this page only.
+    }
+    state.cursor = null;
+    loadBoxes(false);
+  }
   let searchTimer = null;
   let refreshTimer = null;
   let toastTimer = null;
@@ -591,6 +617,15 @@
     document.getElementById("catalog-head").replaceChildren(
       el("h2", {}, state.query ? t("Найдено") : t("Все коробки")),
       el("span", { class: "muted small" }, state.items.length ? String(state.items.length) : ""),
+      el("select", {
+        class: "sort-select",
+        "aria-label": t("Сортировка"),
+        onchange: (event) => setSort(event.target.value),
+      }, [
+        ["number", t("По номеру")],
+        ["updated", t("Сначала изменённые")],
+        ["created", t("Сначала новые")],
+      ].map(([value, label]) => el("option", { value, selected: state.sort === value ? "selected" : null }, label))),
       el("button", { class: "primary", type: "button", onclick: toggleComposer }, composerOpen ? t("Скрыть форму") : t("Новая коробка"))
     );
     const slot = document.getElementById("composer-slot");
@@ -709,6 +744,7 @@
       const params = new URLSearchParams();
       if (state.query.trim()) params.set("q", state.query.trim());
       if (state.query.trim() && state.searchHistory) params.set("history", "1");
+      if (state.sort !== "number") params.set("sort", state.sort);
       if (append && state.cursor) params.set("cursor", state.cursor);
       const data = await api("/boxes?" + params.toString());
       // Searching the history, a box can come back on the next page again.
@@ -738,6 +774,8 @@
     if (String(item.description || "").trim()) parts.push(markdownNode(item.description, true));
     else parts.push(el("span", { class: "muted small" }, t("Без описания")));
     if (item.history_match) parts.push(el("span", { class: "history-match" }, t("найдено в истории")));
+    if (state.sort === "updated") parts.push(el("span", { class: "muted small" }, t("Изменена {when}", { when: formatWhen(item.updated_at) })));
+    if (state.sort === "created") parts.push(el("span", { class: "muted small" }, t("Добавлена {when}", { when: formatWhen(item.created_at) })));
     return parts;
   }
 

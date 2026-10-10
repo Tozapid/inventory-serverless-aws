@@ -148,6 +148,11 @@ class ResetTest(unittest.TestCase):
         self.assertIn("pliers", self.value(tools, "search_text"), "the hidden text is searchable")
         self.assertEqual(self.value(meta["BOX#A-7"], "gsi1sk"), "s:a-7")
         self.assertNotIn("photo_key", meta["BOX#5"])
+        box_one = meta["BOX#1"]
+        first_change = min(k[1] for k in self.ddb.items if k[0] == "BOX#1" and k[1].startswith("HIST#"))
+        self.assertEqual("HIST#" + self.value(box_one, "created_at"), first_change.rsplit("#", 1)[0], "added with its first history entry")
+        self.assertLess(self.value(box_one, "created_at"), self.value(box_one, "updated_at"))
+        self.assertEqual(self.value(meta["BOX#5"], "created_at"), self.value(meta["BOX#5"], "updated_at"), "no history: added when last changed")
 
     def test_example_photos_exist(self):
         photos = os.listdir(os.path.join(SEED, "photos"))
