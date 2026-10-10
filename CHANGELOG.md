@@ -13,6 +13,7 @@
 
 ### Changed
 
+- The photo view lays tiles out row by row in the order of the list (a CSS grid instead of CSS columns, which filled column by column): up to three columns of at least 220px, two on a phone.
 - A row of the list shows the number and the name (the first line of the description) on one line, and the rest of a longer description below it, smaller and without a frame. The number plate no longer stretches across the row.
 - "Contents history" on the card is now "History", since it holds photo descriptions too.
 - The Grok key is write-only: `GET /api/settings` returns `grok_key_set` and the last four characters in `grok_key_hint` (for keys of 12 characters or more), never the key. The key field in the settings stays empty; saving it empty keeps the stored key, `remove_key: true` deletes it, and the settings have a "Delete key" button.

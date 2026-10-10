@@ -446,6 +446,25 @@ test("a row shows the number and the name, the rest of the description below", a
   assert.deepEqual(rows[4], { title: "5No description", rest: "" });
 });
 
+test("the photo view follows the list order row by row", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  await clickText(page, ".seg button", "Photos");
+  await page.waitForSelector(".gallery .tile");
+  // Tiles as the eye reads them: top to bottom, then left to right.
+  const seen = () => page.$$eval(".gallery .tile", (tiles) => tiles
+    .map((tile) => ({ number: tile.querySelector(".plate").textContent, box: tile.getBoundingClientRect() }))
+    .sort((a, b) => Math.round(a.box.top) - Math.round(b.box.top) || a.box.left - b.box.left)
+    .map((tile) => tile.number));
+  assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
+  const tops = await page.$$eval(".gallery .tile", (tiles) => tiles.slice(0, 3).map((tile) => Math.round(tile.getBoundingClientRect().top)));
+  assert.equal(new Set(tops).size, 1, "the first three tiles share a row");
+  await page.setViewport({ width: 390, height: 844 });
+  assert.deepEqual(await seen(), ["1", "2", "3", "4", "5", "12", "A-7"]);
+});
+
 test("a new box is created and opened", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
