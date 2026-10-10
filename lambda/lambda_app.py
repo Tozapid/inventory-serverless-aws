@@ -1,8 +1,9 @@
 """Box inventory API.
 
 Boxes live in one DynamoDB table. The current card is SK=META. Every change of
-the contents is appended as SK=HIST#... Photos stay private in S3 and are shown
-through short-lived signed URLs.
+the contents, and of the photo description written by recognition, is appended
+as SK=HIST#... Photos stay private in S3 and are shown through short-lived
+signed URLs.
 """
 
 import base64
@@ -116,12 +117,14 @@ def list_boxes(event):
     tokens = query_tokens(params.get("q") or "")[:8]
     limit = clamp_limit(params.get("limit"))
     cursor = decode_cursor(params.get("cursor"))
-    if tokens:
+    if tokens and params.get("history") == "1":
+        items, next_key = search_with_history(tokens, cursor, limit)
+    elif tokens:
         items, next_key = search_boxes(tokens, cursor, limit)
     else:
         items, next_key = query_boxes(cursor, limit)
     return response(200, {
-        "items": [public_card(item) for item in items],
+        "items": [dict(public_card(item), **({"history_match": True} if item.get("history_match") else {})) for item in items],
         "next_cursor": encode_cursor(next_key),
         "urls_expire_at": urls_expire_at(),
     })
@@ -169,6 +172,50 @@ def search_boxes(tokens, cursor, limit):
         start = last_key
     found.sort(key=lambda item: item.get("gsi1sk") or item.get("number") or "")
     return found, last_key
+
+
+# Search that also looks through the history, asked for with history=1. The
+# filter cannot fold old texts, so cards and history entries are read and
+# matched here. A box found only by its history is marked history_match. A box
+# whose entries straddle two pages may come back on both; the page drops the
+# repeat.
+def search_with_history(tokens, cursor, limit):
+    from boto3.dynamodb.conditions import Attr
+
+    filt = Attr("sk").eq("META") | Attr("sk").begins_with("HIST#")
+    found = {}
+    by_history = set()
+    start = cursor
+    pages = 0
+    last_key = None
+    while pages < 25:
+        kwargs = {"FilterExpression": filt, "Limit": 100}
+        if start:
+            kwargs["ExclusiveStartKey"] = start
+        resp = table().scan(**kwargs)
+        pages += 1
+        for item in resp.get("Items", []):
+            sk = item.get("sk") or ""
+            if sk == "META" and all(token in (item.get("search_text") or "") for token in tokens):
+                found[item["pk"]] = item
+            elif sk.startswith("HIST#") and history_matches(item, tokens):
+                by_history.add(item["pk"])
+        last_key = resp.get("LastEvaluatedKey")
+        if len(found) + len(by_history - set(found)) >= limit or not last_key:
+            break
+        start = last_key
+    for pk in by_history - set(found):
+        meta = table().get_item(Key={"pk": pk, "sk": "META"}).get("Item")
+        if meta:
+            found[pk] = dict(meta, history_match=True)
+    items = sorted(found.values(), key=lambda item: item.get("gsi1sk") or item.get("number") or "")
+    return items, last_key
+
+
+def history_matches(item, tokens):
+    number = (item.get("pk") or "").removeprefix("BOX#")
+    text = build_search(number, item.get("note") or "", item.get("contents_before") or "", item.get("contents_after") or "")
+    return all(token in text for token in tokens)
 
 
 def create_box(event):
@@ -284,6 +331,7 @@ def get_history(number):
     items = [{
         "at": item.get("changed_at"),
         "by": item.get("changed_by") or "",
+        "field": item.get("field") or "contents",
         "before": item.get("contents_before") or "",
         "after": item.get("contents_after") or "",
         "note": item.get("note") or "",
@@ -335,13 +383,23 @@ def complete_photo(number, event):
         ":ov": version,
     }
     expression = "SET photo_key = :p, thumb_key = :t, photo_content_type = :c, search_text = :s, hidden_text = :h, updated_at = :u, updated_by = :b, version = :nv"
+    actions = [{
+        "Update": {
+            "TableName": table_name(),
+            "Key": {"pk": marshal(box_pk(number)), "sk": marshal("META")},
+            "UpdateExpression": expression,
+            "ConditionExpression": "version = :ov",
+            "ExpressionAttributeValues": {key: marshal(value) for key, value in values.items()},
+        }
+    }]
+    # The description of the old photo goes with it; the history keeps it.
+    old_hidden = current.get("hidden_text") or ""
+    if old_hidden:
+        actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
+            number, old_hidden, "", now, who, "", field="hidden_text"
+        ))}})
     try:
-        table().update_item(
-            Key={"pk": box_pk(number), "sk": "META"},
-            UpdateExpression=expression,
-            ConditionExpression="version = :ov",
-            ExpressionAttributeValues=values,
-        )
+        transact(actions)
     except Exception as exc:
         if conditional_failed(exc):
             raise ApiError(409, "Коробку уже изменили. Повторите загрузку фотографии.") from exc
@@ -405,16 +463,27 @@ def finish_recognition(number, user_email, thumb_key, lang="ru"):
     if not current or current.get("thumb_key") != thumb_key:
         return
     hidden = describe_photo(user_email, thumb_key, lang)
-    table().update_item(
-        Key={"pk": box_pk(number), "sk": "META"},
-        UpdateExpression="SET hidden_text = :h, search_text = :s",
-        ConditionExpression="thumb_key = :t",
-        ExpressionAttributeValues={
-            ":h": hidden,
-            ":s": build_search(number, current.get("description") or "", current.get("contents") or "", hidden),
-            ":t": thumb_key,
-        },
-    )
+    before = current.get("hidden_text") or ""
+    actions = [{
+        "Update": {
+            "TableName": table_name(),
+            "Key": {"pk": marshal(box_pk(number)), "sk": marshal("META")},
+            "UpdateExpression": "SET hidden_text = :h, search_text = :s",
+            "ConditionExpression": "thumb_key = :t",
+            "ExpressionAttributeValues": {
+                ":h": marshal(hidden),
+                ":s": marshal(build_search(number, current.get("description") or "", current.get("contents") or "", hidden)),
+                ":t": marshal(thumb_key),
+            },
+        }
+    }]
+    # Recognition signs the entry with the name of whoever uploaded the photo:
+    # their key paid for it.
+    if hidden != before:
+        actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
+            number, before, hidden, now_iso(), user_email, "", field="hidden_text"
+        ))}})
+    transact(actions)
 
 
 def require_meta(number):
@@ -446,8 +515,10 @@ def query_all(number):
             return items
 
 
-def history_item(number, before, after, now, who, note):
-    return {
+# field says what changed: the contents, or hidden_text, the photo description
+# written by recognition. Entries from before the field existed are contents.
+def history_item(number, before, after, now, who, note, field="contents"):
+    item = {
         "pk": box_pk(number),
         "sk": f"HIST#{now}#{uuid.uuid4().hex[:8]}",
         "contents_before": before,
@@ -456,6 +527,9 @@ def history_item(number, before, after, now, who, note):
         "changed_by": who,
         "note": note,
     }
+    if field != "contents":
+        item["field"] = field
+    return item
 
 
 def presign_post(key, content_type, max_bytes):

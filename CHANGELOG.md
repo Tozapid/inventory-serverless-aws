@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Search in the history, a separate option off by default: the "in history" box next to the search field also looks through earlier contents, comments and photo descriptions. A box found only there is marked "found in history". The API takes it as `history=1` on `GET /api/boxes`.
+- The photo description written by recognition goes into the history of the box, signed by whoever uploaded the photo; replacing a photo records its old description going away. History entries carry `field` (`contents` or `hidden_text`), and the card labels each entry.
+
+### Changed
+
+- "Contents history" on the card is now "History", since it holds photo descriptions too.
+
 ## 2026-09-30
 
 ### Added
