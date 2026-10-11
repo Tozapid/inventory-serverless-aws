@@ -4,6 +4,8 @@
 
 ### Changed
 
+- The sign-in page no longer says it is for invited users only; it links to the source code on GitHub beside the language menu, as Hide My Email does.
+- Settings as in Hide My Email: the new password is typed twice; two-factor authentication (the name in place of "two-step sign-in" everywhere) shows its state and one button, and pairs in two numbered steps (scan the code or type the key, then the code from the app); the language is a drop-down, as on the sign-in page.
 - `.terraform.lock.hcl` is no longer kept in the repository (it is in `.gitignore`): `terraform init` takes the newest AWS provider within the constraint in `terraform.tf`.
 
 ## 2026-10-11

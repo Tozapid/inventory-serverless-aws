@@ -86,7 +86,7 @@ resource "aws_cognito_user" "admin" {
 resource "aws_cognito_user_group" "admins" {
   name         = "admins"
   user_pool_id = aws_cognito_user_pool.main.id
-  description  = "Administrators: invite, disable and delete users, reset two-step sign-in."
+  description  = "Administrators: invite, disable and delete users, reset two-factor authentication."
 }
 
 resource "aws_cognito_user_in_group" "admin" {
