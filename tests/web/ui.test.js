@@ -590,11 +590,30 @@ test("sign in asks for the authenticator code", async (t) => {
   await page.waitForSelector(".box-row");
 });
 
-test("two-step sign-in is turned on and off in the settings", async (t) => {
+test("the new password is typed twice", async (t) => {
+  const opened = await openInventory(t);
+  if (!opened) return;
+  const { page } = opened;
+  await openSettings(page, "Password");
+  await page.waitForSelector('.settings-body input[autocomplete="current-password"]');
+  const [next, again] = await page.$$('.settings-body input[autocomplete="new-password"]');
+  await page.type('.settings-body input[autocomplete="current-password"]', "old-Password-1");
+  await next.type("new-Password-12");
+  await again.type("new-Password-13");
+  await clickText(page, ".settings-body button", "Change password");
+  await until(async () => (await text(page, ".settings-body .error")) === "The new passwords do not match", "mismatch message");
+  await again.click({ clickCount: 3 });
+  await again.type("new-Password-12");
+  await clickText(page, ".settings-body button", "Change password");
+  await until(async () => (await text(page, ".toast")) === "Password changed", "changed message");
+  assert.equal(await page.$eval('.settings-body input[autocomplete="current-password"]', (node) => node.value), "", "the form is cleared");
+});
+
+test("two-factor authentication is turned on and off in the settings", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
   const { page } = wiki;
-  await openSettings(page, "Two-step sign-in");
+  await openSettings(page, "Two-factor authentication");
   await page.waitForSelector(".totp-status");
   assert.match(await text(page, ".totp-status"), /^Off\./);
 
@@ -603,11 +622,11 @@ test("two-step sign-in is turned on and off in the settings", async (t) => {
   assert.ok((await page.$eval(".settings-body svg.qr path", (node) => node.getAttribute("d").length)) > 1000, "the QR code has modules");
   assert.equal(await text(page, ".totp-secret"), "JBSW Y3DP EHPK 3PXP");
   await page.type('.settings-body input[autocomplete="one-time-code"]', "000000");
-  await clickText(page, ".settings-body button", "Confirm");
+  await clickText(page, ".settings-body button", "Verify and turn on");
   await until(async () => (await text(page, ".settings-body .error")) === "Wrong code", "wrong code message");
   await page.type('.settings-body input[autocomplete="one-time-code"]', TOTP_CODE);
-  await clickText(page, ".settings-body button", "Confirm");
-  await until(async () => /^On\./.test(await text(page, ".totp-status")), "status after turning on");
+  await clickText(page, ".settings-body button", "Verify and turn on");
+  await until(async () => /^on Signing in needs a code/.test(await text(page, ".totp-status")), "status after turning on");
 
   await clickText(page, ".settings-body button", "Turn off");
   await until(async () => /^Off\./.test(await text(page, ".totp-status")), "status after turning off");
@@ -618,7 +637,7 @@ test("recognition settings stay hidden while recognition is off", async (t) => {
   if (!off) return;
   await openSettings(off.page, "Password");
   const tabs = await off.page.$$eval(".dialog [role=tab]", (nodes) => nodes.map((node) => node.textContent));
-  assert.deepEqual(tabs, ["Password", "Two-step sign-in", "Language", "Labels", "Users"]);
+  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Users"]);
   assert.equal(off.api.routes("GET /settings").length, 0);
 });
 

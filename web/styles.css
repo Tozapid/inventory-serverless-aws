@@ -296,6 +296,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 
 .settings-body { display: grid; gap: 12px; }
 .settings-body > p { margin: 0; }
+.settings-body .lang-select { justify-self: start; min-width: 200px; font-size: 14px; padding: 7px 10px; }
 
 fieldset.languages { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
 fieldset.languages legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
@@ -342,6 +343,21 @@ table.users tr.disabled td { color: var(--muted); }
   .user-actions, td.row-actions { grid-column: 1 / -1; text-align: left; white-space: normal; padding-top: 6px; }
   .dialog :is(.user-actions, td.row-actions) button { margin: 4px 4px 0 0; }
 }
+
+/* Badges */
+
+.badge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+p > .badge { margin-right: 6px; }
 
 /* Toast */
 

@@ -21,9 +21,9 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 - History of every change of the contents and of the photo description written by recognition: before, after, who and an optional comment. Administrators can delete single entries.
 - Search in the history, off by default: with the "in history" box ticked, search also finds a box by what it used to hold or what its earlier photos showed, and marks such a box "found in history".
 - Optional photo recognition: with a user's own Grok API key the photo is described into hidden text that search uses.
-- Optional two-step sign-in with an authenticator app (TOTP), turned on, switched to another app or off in the settings by each user.
+- Optional two-factor authentication with an authenticator app (TOTP), turned on or off in the settings by each user. Changing the password asks for the new one twice.
 - Labels to print on A4 (Settings → Labels): a QR code linking to the card with the box number and/or name in the largest letters that fit; the label size (30 × 50 mm by default) and the font are chosen there and remembered.
-- Settings for administrators: invite, disable and delete users, see who has two-step sign-in and reset it for a lost phone.
+- Settings for administrators: invite, disable and delete users, see who has two-factor authentication and reset it for a lost phone.
 - Keyboard: ⌘Enter / Ctrl+Enter saves a card, I edits it, J and L go to the previous and the next box, Esc leaves editing (asking if anything changed) or closes the card.
 - Interface in English, Russian, French and Italian, following the system language.
 
@@ -178,17 +178,17 @@ cd tests/web && npm ci && npm test
 - search: folding, tokens, hidden photo text, accented words;
 - identity: only a verified email names the user, so nobody reads another user's settings;
 - error messages in the page language, field names included;
-- administration: only the `admins` group gets in, invite (with and without email), disable, delete, reset two-step sign-in, no locking yourself out;
+- administration: only the `admins` group gets in, invite (with and without email), disable, delete, reset two-factor authentication, no locking yourself out;
 - recognition switched off: no key handed out or saved, nothing queued;
 - CloudFront cookie signing, checked byte for byte against `openssl`;
-- the demo reset: wipes the table, every photo version and other users, brings the admin back with two-step sign-in off and writes the example boxes and their history again, keeping their photos; every example photo exists.
+- the demo reset: wipes the table, every photo version and other users, brings the admin back with two-factor authentication off and writes the example boxes and their history again, keeping their photos; every example photo exists.
 
 **Frontend** (`tests/web/`, `node --test`):
 
 | File | What it checks |
 | --- | --- |
 | `i18n.test.js` | Every interface string has English, French and Italian text with the same `{placeholders}`, and no Russian text reaches the page without `t()`; the system language is picked unless one was chosen. |
-| `ui.test.js` | The page in headless Chrome against an in-memory API filled with the example boxes: demo sign-in, the example photos and a card opened by its address, search by hidden photo text, creating a box, the code step at sign-in, two-step sign-in in the settings with a real QR code (its integrity hash checked), recognition settings shown only when on, invitations without email and 2FA reset in the users list, switching language. Chrome is found on the usual paths or taken from `CHROME_PATH`; without it these tests are skipped locally and fail in CI. |
+| `ui.test.js` | The page in headless Chrome against an in-memory API filled with the example boxes: demo sign-in, the example photos and a card opened by its address, search by hidden photo text, creating a box, the code step at sign-in, two-factor authentication in the settings with a real QR code (its integrity hash checked), recognition settings shown only when on, invitations without email and 2FA reset in the users list, switching language. Chrome is found on the usual paths or taken from `CHROME_PATH`; without it these tests are skipped locally and fail in CI. |
 
 ## Limits
 

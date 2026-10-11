@@ -5,6 +5,8 @@
   const root = document.getElementById("root");
   // The chosen order stays in this browser. Storage may be off (a private
   // window), and then the list simply starts by number (the box address).
+  // The open source project of this page, linked from the sign-in page.
+  const REPOSITORY = "https://github.com/Tozapid/inventory-serverless-aws";
   const SORT_KEY = "inventory-sort";
   const SORTS = ["number", "name", "updated", "created"];
   const state = {
@@ -428,13 +430,15 @@
       el("section", { class: "login-card" }, [
         el("img", { class: "login-mark", src: "/favicon.svg", alt: "" }),
         el("h1", {}, t("Инвентарь коробок")),
-        el("p", { class: "lede" }, t("Вход только для приглашённых пользователей.")),
         demo.email ? el("p", { class: "demo-note" }, [
           t("Демо: {email} / {password}.", { email: demo.email, password: demo.password }),
           demo.reset ? " " + t("Все данные и пользователи стираются каждый час.") : "",
         ]) : null,
         form,
-        el("div", { class: "login-lang" }, languagePicker()),
+        el("div", { class: "login-lang" }, [
+          el("a", { href: REPOSITORY, rel: "noopener" }, t("Исходный код на GitHub")),
+          languagePicker(),
+        ]),
       ]),
     ]));
   }
@@ -1477,7 +1481,7 @@
     } catch (error) {
       // Offline or signed out: show what the current session allows.
     }
-    const sections = [["password", t("Пароль")], ["totp", t("Вход в два шага")]];
+    const sections = [["password", t("Пароль")], ["totp", t("Двухфакторная аутентификация")]];
     if (config.recognition) sections.push(["recognition", t("Распознавание")]);
     sections.push(["language", t("Язык")]);
     sections.push(["labels", t("Этикетки")]);
@@ -1806,41 +1810,44 @@
     window.print();
   }
 
+  // The same drop-down as on the sign-in page; switching reloads the page.
   function languageSection(body) {
-    body.append(el("fieldset", { class: "languages" }, [
-      el("legend", {}, t("Язык интерфейса")),
-      ...I18n.languages.map(([code, name]) => el("label", { class: "check" }, [
-        el("input", { type: "radio", name: "lang", value: code, checked: code === I18n.lang, onchange: () => switchLanguage(code) }),
-        name,
-      ])),
-      el("p", { class: "hint" }, I18n.chosen()
-        ? t("Выбор хранится в этом браузере.")
-        : t("Сейчас язык взят из настроек системы.")),
-    ]));
+    body.append(languagePicker());
   }
 
-  function passwordSection(body, wrap) {
+  function passwordSection(body) {
     const error = el("p", { class: "error", role: "alert" });
     const oldPassword = el("input", { type: "password", autocomplete: "current-password", required: true });
     const newPassword = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "8" });
-    body.append(el("form", {
+    const again = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "8" });
+    const button = el("button", { type: "submit", class: "primary" }, t("Сменить пароль"));
+    const form = el("form", {
       onsubmit: async (event) => {
         event.preventDefault();
+        error.textContent = "";
+        if (newPassword.value !== again.value) {
+          error.textContent = t("Новые пароли не совпадают");
+          return;
+        }
+        button.disabled = true;
         try {
           await changePassword(oldPassword.value, newPassword.value);
-          wrap.remove();
+          form.reset();
           toast(t("Пароль изменён"));
         } catch (err) {
           error.textContent = authMessage(err);
         }
+        button.disabled = false;
       },
     }, [
       el("label", {}, [t("Текущий пароль"), oldPassword]),
       el("label", {}, [t("Новый пароль"), newPassword]),
+      el("label", {}, [t("Новый пароль ещё раз"), again]),
       el("p", { class: "hint" }, t("Не короче 8 символов, со строчной буквой и цифрой.")),
-      el("div", { class: "dialog-actions" }, [el("button", { type: "submit", class: "primary" }, t("Сменить пароль"))]),
+      el("div", { class: "dialog-actions" }, [button]),
       error,
-    ]));
+    ]);
+    body.append(form);
     oldPassword.focus();
   }
 
@@ -1985,6 +1992,8 @@
     }));
   }
 
+  // Two-factor authentication with an authenticator app (TOTP): Cognito gives a
+  // secret, the app shows codes, one code confirms the pairing.
   async function totpSection(body) {
     body.append(el("p", { class: "muted" }, t("Проверяю…")));
     let user;
@@ -2000,20 +2009,13 @@
 
     function draw() {
       body.replaceChildren(
-        el("p", { class: "totp-status" }, [
-          el("strong", {}, enabled ? t("Включён.") : t("Выключен.")),
-          " ",
-          enabled
-            ? t("После пароля инвентарь спрашивает код из приложения-аутентификатора.")
-            : t("Можно включить: после пароля инвентарь будет спрашивать шестизначный код из приложения-аутентификатора, например Google Authenticator, Microsoft Authenticator, 1Password или Aegis."),
-        ]),
-        el("div", { class: "dialog-actions start" }, enabled
-          ? [
-            el("button", { type: "button", onclick: () => setup() }, t("Подключить другое приложение")),
-            el("button", { type: "button", class: "danger", onclick: () => disable() }, t("Выключить")),
-          ]
-          : [el("button", { type: "button", class: "primary", onclick: () => setup() }, t("Включить"))]),
-        el("p", { class: "hint" }, t("Если телефон потерян, администратор может сбросить вход в два шага в разделе «Пользователи».")),
+        enabled
+          ? el("p", { class: "totp-status" }, [el("span", { class: "badge ok" }, t("включена")), " ", t("При входе нужен код из приложения-аутентификатора.")])
+          : el("p", { class: "totp-status muted" }, t("Выключена. С ней при входе, кроме пароля, нужен код из приложения: Google Authenticator, 1Password, Яндекс Ключ и других.")),
+        el("div", { class: "dialog-actions" }, enabled
+          ? el("button", { type: "button", class: "danger", onclick: () => disable() }, t("Выключить"))
+          : el("button", { type: "button", class: "primary", onclick: () => setup() }, t("Включить"))),
+        el("p", { class: "hint" }, t("Если телефон потерян, администратор может сбросить двухфакторную аутентификацию в разделе «Пользователи».")),
       );
     }
 
@@ -2027,18 +2029,16 @@
     }
 
     async function disable() {
-      if (!window.confirm(t("Выключить вход в два шага? Входить можно будет по одному паролю."))) return;
+      if (!window.confirm(t("Отключить двухфакторную аутентификацию? Для входа снова будет достаточно пароля."))) return;
       try {
         await setTotp(user, false);
-        toast(t("Вход в два шага выключен"));
+        toast(t("Двухфакторная аутентификация отключена"));
       } catch (error) {
         toast(authMessage(error));
       }
       await refresh();
     }
 
-    // Cognito drops the old app as soon as a new secret is issued, so until the
-    // new code is confirmed the account signs in with the password alone.
     async function setup() {
       let secret;
       try {
@@ -2052,36 +2052,29 @@
         + "?secret=" + secret + "&issuer=" + encodeURIComponent(issuer);
       const error = el("p", { class: "error", role: "alert" });
       const code = el("input", { type: "text", inputmode: "numeric", autocomplete: "one-time-code", pattern: "[0-9]{6}", maxlength: "6", required: true });
-      body.replaceChildren(
-        el("ol", { class: "totp-steps" }, [
-          el("li", {}, t("Отсканируйте QR-код приложением-аутентификатором.")),
-          el("li", {}, t("Введите код, который покажет приложение.")),
-        ]),
+      body.replaceChildren(el("form", {
+        onsubmit: async (event) => {
+          event.preventDefault();
+          error.textContent = "";
+          try {
+            await verifyTotp(user, code.value.trim());
+            await setTotp(user, true);
+            toast(t("Двухфакторная аутентификация включена"));
+            await refresh();
+          } catch (err) {
+            error.textContent = authMessage(err);
+            code.value = "";
+            code.focus();
+          }
+        },
+      }, [
+        el("p", {}, t("1. Отсканируйте код приложением-аутентификатором или введите ключ вручную.")),
         qrCode(uri),
-        el("p", { class: "hint" }, [t("Если отсканировать не получается, введите в приложении ключ:"), " ", el("code", { class: "totp-secret" }, secret.replace(/(.{4})/g, "$1 ").trim())]),
-        el("form", {
-          onsubmit: async (event) => {
-            event.preventDefault();
-            try {
-              await verifyTotp(user, code.value.trim());
-              await setTotp(user, true);
-              toast(t("Вход в два шага включён"));
-              await refresh();
-            } catch (err) {
-              error.textContent = authMessage(err);
-              code.value = "";
-              code.focus();
-            }
-          },
-        }, [
-          el("label", {}, [t("Код из приложения"), code]),
-          el("div", { class: "dialog-actions" }, [
-            el("button", { type: "button", onclick: () => refresh() }, t("Отмена")),
-            el("button", { type: "submit", class: "primary" }, t("Подтвердить")),
-          ]),
-          error,
-        ]),
-      );
+        el("p", {}, el("code", { class: "totp-secret" }, secret.replace(/(.{4})/g, "$1 ").trim())),
+        el("label", {}, [t("2. Код из приложения"), code]),
+        el("div", { class: "dialog-actions" }, [el("button", { type: "submit", class: "primary" }, t("Подтвердить и включить"))]),
+        error,
+      ]));
       code.focus();
     }
   }
@@ -2173,7 +2166,7 @@
           ])),
           el("td", { class: "user-actions" }, user.self ? null : [
             el("button", { type: "button", onclick: () => change(user, { reset_password: true }, t("Выдать {email} новый временный пароль? Старый перестанет работать.", { email: user.email })) }, t("Новый пароль")),
-            user.mfa ? el("button", { type: "button", onclick: () => change(user, { reset_mfa: true }, t("Сбросить вход в два шага у {email}? Входить можно будет по одному паролю, приложение подключается заново в настройках.", { email: user.email })) }, t("Сбросить 2FA")) : null,
+            user.mfa ? el("button", { type: "button", onclick: () => change(user, { reset_mfa: true }, t("Сбросить двухфакторную аутентификацию у {email}? Входить можно будет по одному паролю, приложение подключается заново в настройках.", { email: user.email })) }, t("Сбросить 2FA")) : null,
             el("button", { type: "button", onclick: () => change(user, { enabled: !user.enabled }) }, user.enabled ? t("Отключить") : t("Включить")),
             el("button", { type: "button", class: "danger", onclick: () => remove(user) }, t("Удалить")),
           ]),
