@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-11
+
+### Changed
+
+- Deploy from a branch: a manual run of the workflow applies the branch it was started from, not only `main`, over the same demo site; the run summary names the branch and warns that the next push to `main` replaces it. Applies from different branches wait for each other.
+- The page: one design shared with the sibling projects (Hide My Email, the box inventory and the wiki): the same block of variables and components opens `web/styles.css` in all three and is kept identical — an indigo accent, system fonts, rounded cards, fields, buttons, dialogs, settings, tables and toasts. Light and dark themes follow the system setting. Square corners, the paper colours and serif headings are gone; the box number badge and the selected row use the accent. The photo viewer stays dark in both themes, labels print black on white as before.
+- New favicon in the shared style (a box on indigo); it is also the logo on the sign-in card and in the top bar, in place of the letter mark.
+
 ## 2026-10-10
 
 ### Added
