@@ -1076,7 +1076,7 @@ def user_pk(event):
 
 # Users --------------------------------------------------------------------
 # Members of the Cognito admin group invite, disable and delete users and
-# reset two-step sign-in for someone who lost their phone.
+# reset two-factor authentication for someone who lost their phone.
 
 def admin_route(method, parts, params, event):
     if not is_admin(event):

@@ -3,7 +3,7 @@
 Brings the inventory back to a fresh deployment: every box, history entry and
 user setting is removed from DynamoDB, every uploaded photo (all versions)
 from S3, and every Cognito user except the demo administrator, whose password,
-two-step sign-in and admin rights are put back.
+two-factor authentication and admin rights are put back.
 
 The example boxes in boxes.json (seed/ in the repository) are then written
 again. Their photos live under seed/photos/ in the media bucket, are uploaded
