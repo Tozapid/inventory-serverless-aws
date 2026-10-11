@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-12
+
+### Changed
+
+- `.terraform.lock.hcl` is no longer kept in the repository (it is in `.gitignore`): `terraform init` takes the newest AWS provider within the constraint in `terraform.tf`.
+
 ## 2026-10-11
 
 ### Changed
