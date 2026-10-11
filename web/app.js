@@ -426,7 +426,7 @@
     ]);
     root.replaceChildren(el("main", { class: "login" }, [
       el("section", { class: "login-card" }, [
-        el("div", { class: "mark" }, t("К")),
+        el("img", { class: "login-mark", src: "/favicon.svg", alt: "" }),
         el("h1", {}, t("Инвентарь коробок")),
         el("p", { class: "lede" }, t("Вход только для приглашённых пользователей.")),
         demo.email ? el("p", { class: "demo-note" }, [
@@ -585,8 +585,9 @@
           href: "/",
           onclick: (event) => followLink(event, closeDetail),
         }, [
-          el("div", { class: "mark" }, t("К")),
-          el("div", {}, [el("strong", {}, t("Коробки")), el("span", {}, t("инвентарь"))]),
+          el("img", { class: "brand-mark", src: "/favicon.svg", alt: "" }),
+          el("strong", {}, t("Коробки")),
+          el("span", {}, t("инвентарь")),
         ]),
         el("div", { class: "search" }, [search, inHistory]),
         el("div", { class: "seg" }, [
