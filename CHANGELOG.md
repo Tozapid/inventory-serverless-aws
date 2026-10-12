@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.1
+
+### Fixed
+
+- Settings → Version showed the word "null" under the version when no newer release was out.
+
+### Changed
+
+- A `CHANGELOG.md` entry no longer needs a date: `## v1.4.1`, `## v1.4.1 — 2026-10-12` and `## v1.4.1 — a title` all work. GitHub dates the release itself.
+
 ## v1.4.0 — 2026-10-12
 
 ### Added

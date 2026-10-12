@@ -58,7 +58,8 @@ resource "aws_lambda_function" "api" {
 }
 
 # The version of this deployment: the newest entry of CHANGELOG.md
-# (## vX.Y.Z — date). After main is deployed, CI releases it on GitHub.
+# (## vX.Y.Z, then optionally " — " and a date or a title). After main is
+# deployed, CI releases it on GitHub.
 locals {
-  version = regex("(?m)^## (v[0-9]+\\.[0-9]+\\.[0-9]+) ", file("${path.module}/CHANGELOG.md"))[0]
+  version = regex("(?m)^## (v[0-9]+\\.[0-9]+\\.[0-9]+)(?:\\s|$)", file("${path.module}/CHANGELOG.md"))[0]
 }

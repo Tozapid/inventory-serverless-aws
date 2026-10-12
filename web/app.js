@@ -1831,7 +1831,8 @@
     else if (!info.latest) status = el("p", { class: "muted" }, t("Релизов пока нет."));
     else if (!info.newer.length) status = el("p", { class: "totp-status" }, [el("span", { class: "badge ok" }, t("актуальна")), " ", t("Это последний релиз.")]);
     else status = el("p", { class: "totp-status" }, [el("span", { class: "badge warn" }, t("есть новее")), " ", t("Вышло после этой версии: {count}", { count: info.newer.length })]);
-    body.replaceChildren(
+    // replaceChildren would show a null as the text "null".
+    body.replaceChildren(...[
       el("dl", { class: "version-facts" }, [
         el("dt", {}, t("Версия")),
         el("dd", {}, info.version && info.url ? link(info.url + "/tag/" + encodeURIComponent(info.version), info.version) : info.version || "—"),
@@ -1844,7 +1845,7 @@
         release.date ? el("span", { class: "muted" }, " · " + release.date) : null,
         release.notes ? el("p", { class: "release-notes" }, release.notes) : null,
       ]))) : null,
-    );
+    ].filter(Boolean));
   }
 
   // The same drop-down as on the sign-in page; switching reloads the page.
