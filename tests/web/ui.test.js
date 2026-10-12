@@ -191,6 +191,16 @@ function fakeApi() {
         ] }];
       case "GET /me":
         return [200, { email: ADMIN.email, admin: true }];
+      case "GET /version":
+        return [200, {
+          version: "v1.3.0",
+          repository: "Tozapid/inventory-serverless-aws",
+          url: "https://github.com/Tozapid/inventory-serverless-aws/releases",
+          latest: "v1.4.0",
+          newer: [{ version: "v1.4.0", title: "v1.4.0 — 2026-10-12", date: "2026-10-12", url: "https://github.com/Tozapid/inventory-serverless-aws/releases/tag/v1.4.0", notes: "Added\n• Settings → Version" }],
+          checked_at: "2026-10-12T12:00:00Z",
+          error: null,
+        }];
       case "GET /admin/users":
         return [200, { items: users }];
       case "POST /admin/users":
@@ -637,7 +647,7 @@ test("recognition settings stay hidden while recognition is off", async (t) => {
   if (!off) return;
   await openSettings(off.page, "Password");
   const tabs = await off.page.$$eval(".dialog [role=tab]", (nodes) => nodes.map((node) => node.textContent));
-  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Users"]);
+  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Users", "Version"]);
   assert.equal(off.api.routes("GET /settings").length, 0);
 });
 
@@ -647,6 +657,19 @@ test("recognition settings show when it is on", async (t) => {
   await openSettings(on.page, "Recognition");
   await on.page.waitForSelector(".settings-body input[type=password]");
   assert.equal(on.api.routes("GET /settings").length, 1);
+});
+
+test("the version tab shows the releases that came after this version", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await openSettings(page, "Version");
+  await page.waitForSelector(".releases li");
+  assert.equal(await text(page, ".version-facts"), "Versionv1.3.0RepositoryTozapid/inventory-serverless-aws");
+  assert.equal(await page.$eval(".version-facts a", (a) => a.href), "https://github.com/Tozapid/inventory-serverless-aws/releases/tag/v1.3.0");
+  assert.equal(await text(page, ".totp-status"), "newer out Released since this version: 1");
+  assert.equal(await text(page, ".releases li strong"), "v1.4.0 — 2026-10-12");
+  assert.equal(await page.$eval(".release-notes", (node) => node.textContent), "Added\n• Settings → Version");
 });
 
 test("labels: pick boxes and print A4 sheets of 30 × 50 mm", async (t) => {

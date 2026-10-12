@@ -17,7 +17,8 @@ concurrency:
 jobs:
   ci:
     uses: Tozapid/demo-ci-cd-skeleton/.github/workflows/terraform.yml@main
-    # The plan and apply jobs trade GitHub's OIDC token for the AWS role.
+    # The plan and apply jobs trade GitHub's OIDC token for the AWS role; the
+    # release job writes the tag and the release of the newest CHANGELOG entry.
     permissions:
-      contents: read
+      contents: write
       id-token: write

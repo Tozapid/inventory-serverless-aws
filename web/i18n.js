@@ -215,6 +215,15 @@
     "Новые пароли не совпадают": "The new passwords do not match",
     "Сбросить двухфакторную аутентификацию у {email}? Входить можно будет по одному паролю, приложение подключается заново в настройках.": "Reset two-factor authentication for {email}? They will sign in with the password alone and can connect an app again in the settings.",
     "Исходный код на GitHub": "Source code on GitHub",
+    "Версия": "Version",
+    "Репозиторий": "Repository",
+    "актуальна": "up to date",
+    "есть новее": "newer out",
+    "Это последний релиз.": "This is the newest release.",
+    "Вышло после этой версии: {count}": "Released since this version: {count}",
+    "Релизов пока нет.": "No releases yet.",
+    "Проверка релизов выключена.": "The release check is off.",
+    "GitHub не ответил, релизы не получены. Попробуйте позже.": "GitHub did not answer, so there are no releases to show. Try again later.",
   };
   const FR = {
     "Создание коробки": "Carton créé",
@@ -425,6 +434,15 @@
     "Новые пароли не совпадают": "Les nouveaux mots de passe ne correspondent pas",
     "Сбросить двухфакторную аутентификацию у {email}? Входить можно будет по одному паролю, приложение подключается заново в настройках.": "Réinitialiser l’authentification à deux facteurs de {email} ? Le mot de passe seul suffira, l’application se réassocie dans les paramètres.",
     "Исходный код на GitHub": "Code source sur GitHub",
+    "Версия": "Version",
+    "Репозиторий": "Dépôt",
+    "актуальна": "à jour",
+    "есть новее": "plus récente disponible",
+    "Это последний релиз.": "C’est la dernière version publiée.",
+    "Вышло после этой версии: {count}": "Publiées depuis cette version : {count}",
+    "Релизов пока нет.": "Aucune version publiée pour l’instant.",
+    "Проверка релизов выключена.": "La vérification des versions est désactivée.",
+    "GitHub не ответил, релизы не получены. Попробуйте позже.": "GitHub n’a pas répondu, les versions n’ont pas été obtenues. Réessayez plus tard.",
   };
   const IT = {
     "Создание коробки": "Scatola creata",
@@ -635,6 +653,15 @@
     "Новые пароли не совпадают": "Le nuove password non coincidono",
     "Сбросить двухфакторную аутентификацию у {email}? Входить можно будет по одному паролю, приложение подключается заново в настройках.": "Reimpostare l’autenticazione a due fattori di {email}? Basterà la password, l’app si ricollega nelle impostazioni.",
     "Исходный код на GitHub": "Codice sorgente su GitHub",
+    "Версия": "Versione",
+    "Репозиторий": "Repository",
+    "актуальна": "aggiornata",
+    "есть новее": "più recente disponibile",
+    "Это последний релиз.": "È l’ultima release.",
+    "Вышло после этой версии: {count}": "Uscite dopo questa versione: {count}",
+    "Релизов пока нет.": "Ancora nessuna release.",
+    "Проверка релизов выключена.": "Il controllo delle release è disattivato.",
+    "GitHub не ответил, релизы не получены. Попробуйте позже.": "GitHub non ha risposto, le release non sono state ottenute. Riprova più tardi.",
   };
   const DICTIONARIES = { en: EN, fr: FR, it: IT };
 

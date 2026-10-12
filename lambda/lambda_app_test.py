@@ -801,5 +801,126 @@ class SigningTest(unittest.TestCase):
         self.assertTrue(cookies[2].startswith("CloudFront-Key-Pair-Id=K123;"))
 
 
+def version_route():
+    result = lambda_app.route("GET", ["version"], {"requestContext": {}})
+    return result["statusCode"], json.loads(result["body"])
+
+
+FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <updated>2026-10-14T09:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Tozapid/Example/releases/tag/v1.10.0"/>
+    <title>v1.10.0 — 2026-10-14 — versions</title>
+    <content type="html">&lt;h3&gt;Added&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Settings → &lt;code&gt;Version&lt;/code&gt; shows the &lt;a href="x"&gt;releases&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;Two&lt;/li&gt;
+&lt;/ul&gt;</content>
+  </entry>
+  <entry>
+    <updated>2026-10-13T09:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Tozapid/Example/releases/tag/nightly"/>
+    <title>nightly</title>
+  </entry>
+  <entry>
+    <updated>2026-10-12T09:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Tozapid/Example/releases/tag/v1.9.0"/>
+    <title>v1.9.0 — 2026-10-12</title>
+  </entry>
+  <entry>
+    <updated>2026-10-13T08:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Tozapid/Example/releases/tag/v1.9.1"/>
+    <title>v1.9.1 — 2026-10-13 — a fix</title>
+  </entry>
+</feed>""".encode()
+
+
+class FakeFeed:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self, limit=-1):
+        return self.body
+
+
+# The releases of the demo repository from the Atom feed of GitHub, without
+# GitHub: urlopen is replaced.
+class VersionTest(unittest.TestCase):
+    def setUp(self):
+        self.saved = {name: os.environ.get(name) for name in ("VERSION", "RELEASES_REPOSITORY")}
+        os.environ.update(VERSION="v1.9.0", RELEASES_REPOSITORY="Tozapid/Example")
+        self.urls = []
+        self.feed = FEED
+        real = lambda_app.urllib.request.urlopen
+        lambda_app.urllib.request.urlopen = self.urlopen
+        self.addCleanup(setattr, lambda_app.urllib.request, "urlopen", real)
+        lambda_app._releases = None
+        self.addCleanup(setattr, lambda_app, "_releases", None)
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def urlopen(self, request, timeout=None):
+        self.urls.append(request.full_url)
+        if isinstance(self.feed, Exception):
+            raise self.feed
+        return FakeFeed(self.feed)
+
+    def test_the_releases_after_this_version_newest_first(self):
+        status, info = version_route()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.urls, ["https://github.com/Tozapid/Example/releases.atom"])
+        self.assertEqual((info["version"], info["repository"], info["latest"], info["error"]), ("v1.9.0", "Tozapid/Example", "v1.10.0", None))
+        self.assertEqual(info["url"], "https://github.com/Tozapid/Example/releases")
+        self.assertEqual([release["version"] for release in info["newer"]], ["v1.10.0", "v1.9.1"], "by number, not by text; no tag without a version")
+        newest = info["newer"][0]
+        self.assertEqual((newest["title"], newest["date"], newest["url"]), ("v1.10.0 — 2026-10-14 — versions", "2026-10-14", "https://github.com/Tozapid/Example/releases/tag/v1.10.0"))
+        self.assertEqual(newest["notes"], "Added\n• Settings → Version shows the releases.\n• Two")
+        self.assertTrue(info["checked_at"].endswith("Z"))
+
+    def test_the_newest_version_has_nothing_newer(self):
+        os.environ["VERSION"] = "v1.10.0"
+        info = lambda_app.version_info()
+        self.assertEqual((info["latest"], info["newer"]), ("v1.10.0", []))
+
+    def test_the_list_stays_an_hour(self):
+        lambda_app.version_info()
+        lambda_app.version_info()
+        self.assertEqual(len(self.urls), 1)
+        repository, read_at, releases, checked_at = lambda_app._releases
+        lambda_app._releases = (repository, read_at - lambda_app.RELEASES_SECONDS - 1, releases, checked_at)
+        lambda_app.version_info()
+        self.assertEqual(len(self.urls), 2)
+
+    def test_without_github_the_last_list_serves(self):
+        self.feed = OSError("no network")
+        info = lambda_app.version_info()
+        self.assertEqual((info["version"], info["error"], info["newer"]), ("v1.9.0", "unavailable", []))
+        self.feed = FEED
+        lambda_app.version_info()
+        repository, read_at, releases, checked_at = lambda_app._releases
+        lambda_app._releases = (repository, read_at - lambda_app.RELEASES_SECONDS - 1, releases, checked_at)
+        self.feed = b"<html>not a feed"
+        info = lambda_app.version_info()
+        self.assertEqual((info["error"], info["latest"], info["checked_at"]), (None, "v1.10.0", checked_at))
+
+    def test_without_a_repository_nothing_is_asked(self):
+        os.environ["RELEASES_REPOSITORY"] = ""
+        info = lambda_app.version_info()
+        self.assertEqual((info["version"], info["url"], info["latest"], info["error"]), ("v1.9.0", None, None, None))
+        self.assertEqual(self.urls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,13 @@
 # Changelog
 
-## 2026-10-12
+## v1.4.0 — 2026-10-12
+
+### Added
+
+- Settings → Version: the version of the site and the releases of the demo repository that came after it, with their notes. The API reads them from the Atom feed of the GitHub releases (`GET /api/version`) and keeps them an hour.
+- Versions: every entry of this changelog starts with `vX.Y.Z`. After `main` is deployed, CI makes the tag and the GitHub release of the newest entry if it is not out yet. The site takes its version from the newest entry when it is deployed; `releases_repository` names the repository to compare with.
+
+## v1.3.0 — 2026-10-12
 
 ### Changed
 
@@ -8,7 +15,7 @@
 - Settings as in Hide My Email: the new password is typed twice; two-factor authentication (the name in place of "two-step sign-in" everywhere) shows its state and one button, and pairs in two numbered steps (scan the code or type the key, then the code from the app); the language is a drop-down, as on the sign-in page.
 - `.terraform.lock.hcl` is no longer kept in the repository (it is in `.gitignore`): `terraform init` takes the newest AWS provider within the constraint in `terraform.tf`.
 
-## 2026-10-11
+## v1.2.0 — 2026-10-11
 
 ### Changed
 
@@ -19,7 +26,7 @@
 - The page: one design shared with the sibling projects (Hide My Email, the box inventory and the wiki): the same block of variables and components opens `web/styles.css` in all three and is kept identical — an indigo accent, system fonts, rounded cards, fields, buttons, dialogs, settings, tables and toasts. Light and dark themes follow the system setting. Square corners, the paper colours and serif headings are gone; the box number badge and the selected row use the accent. The photo viewer stays dark in both themes, labels print black on white as before.
 - New favicon in the shared style (a box on indigo); it is also the logo on the sign-in card and in the top bar, in place of the letter mark.
 
-## 2026-10-10
+## v1.1.0 — 2026-10-10
 
 ### Added
 
@@ -44,7 +51,7 @@
 - GitHub Actions on Node.js 24: `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7`, `hashicorp/setup-terraform@v4`, `aws-actions/configure-aws-credentials@v6`.
 - `dynamodb.tf`: the keys of the `boxes` index are `key_schema` blocks instead of the deprecated `hash_key` and `range_key` (AWS provider 6.x).
 
-## 2026-09-30
+## v1.0.0 — 2026-09-30
 
 ### Added
 
