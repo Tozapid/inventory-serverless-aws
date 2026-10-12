@@ -73,3 +73,9 @@ variable "tags" {
   }
   description = "Tags applied to supported resources."
 }
+
+variable "releases_repository" {
+  type        = string
+  default     = "Tozapid/inventory-serverless-aws"
+  description = "GitHub repository (owner/name) whose releases the settings compare the version of the site with. Empty turns the check off."
+}
