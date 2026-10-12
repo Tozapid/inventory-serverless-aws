@@ -670,6 +670,7 @@ test("the version tab shows the releases that came after this version", async (t
   assert.equal(await text(page, ".totp-status"), "newer out Released since this version: 1");
   assert.equal(await text(page, ".releases li strong"), "v1.4.0 — 2026-10-12");
   assert.equal(await page.$eval(".release-notes", (node) => node.textContent), "Added\n• Settings → Version");
+  assert.doesNotMatch(await text(page, ".settings-body"), /null/, "no empty part shown as text");
 });
 
 test("labels: pick boxes and print A4 sheets of 30 × 50 mm", async (t) => {
