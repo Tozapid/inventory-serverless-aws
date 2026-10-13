@@ -1,0 +1,30 @@
+# Version updates: once a week, one pull request per ecosystem with every
+# update that is due. Security updates come as soon as an alert is found, one
+# pull request each (Settings → Advanced Security, managed in
+# Tozapid/terraform-916503251961-tozapid, stack github-tozapid).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns: ["*"]
+  - package-ecosystem: terraform
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      terraform:
+        applies-to: version-updates
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: "/tests/web"
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        applies-to: version-updates
+        patterns: ["*"]
