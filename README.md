@@ -104,7 +104,7 @@ Prices are approximate and change over time; check the AWS pricing pages for you
    ```
 
    Its permissions: everything named with the `inventory-serverless` prefix (the `name` variable: buckets, the table, functions, roles with `iam:PassRole`, log groups, SSM parameters, the EventBridge rule), API Gateway, Cognito and CloudFront (their ids are generated), log delivery for API access logs, and the state objects under the state key prefix.
-3. In the GitHub repository: the environment `demo`, and the variables `AWS_ROLE_ARN` (the role) and `TF_STATE_BUCKET` (the state bucket). There are no secrets.
+3. In the GitHub repository: the environment `demo`, and the variables `AWS_ROLE_ARN` (the role) and `TF_STATE_BUCKET` (the state bucket). There are no secrets. Optionally `ACCESS_LOGS_BUCKET`: the CI passes it as `access_logs_bucket`, and the CloudFront access logs of the site go there (see [Access logs](#access-logs)); the role then also needs log delivery in `us-east-1` (`logs:PutDeliverySource`, `PutDeliveryDestination`, `CreateDelivery` and their `Get`/`Delete`/`Describe` on names with the prefix) and `s3:GetBucketPolicy` on that bucket.
 
 ### GitHub Actions
 
@@ -162,6 +162,12 @@ With `recognition = true`, the settings get a Recognition tab where each user st
 The key is write-only: the page only learns that a key is saved and its last four characters. Below the key, the tab shows the user's recognition log: the last 50 attempts over 30 days, with what Grok answered when it failed. Administrators can switch it to everyone's attempts.
 
 It is off in the public demo for a reason: everybody signs in as the same administrator, so a key saved there would be spent by the next visitor; the key cannot be read back, but anyone signed in as that admin can upload photos on it. The example boxes carry hidden text of their own, so searching for `spanners` or `rolls` still shows what recognition does.
+
+## Access logs
+
+Off by default. With `access_logs_bucket` set (the repository variable `ACCESS_LOGS_BUCKET` in CI), `access-logs.tf` turns on the standard logs (v2) of CloudFront: CloudWatch delivers a gzipped JSON line per request from `us-east-1` to `cloudfront/<name>/<yyyy>/<MM>/<dd>/` of that bucket, at no charge for the delivery to S3. A line holds the date and time, the address and country of the viewer, the method, path, status, bytes, time taken, referrer, user agent, cache result and host.
+
+The bucket is yours, in the same account: its policy has to let `delivery.logs.amazonaws.com` put objects under `cloudfront/` (and read the bucket ACL), conditioned on the account. [account-serverless-aws](https://github.com/Tozapid/account-serverless-aws) reads such a bucket and shows the traffic of each site.
 
 ## Repository layout
 

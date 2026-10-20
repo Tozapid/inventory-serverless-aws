@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.0
+
+### Added
+
+- CloudFront access logs, optional: with `access_logs_bucket` set, the standard logs (v2) of the distribution go to that bucket under `cloudfront/<name>/` as JSON lines, for an overview of the account such as [account-serverless-aws](https://github.com/Tozapid/account-serverless-aws) to read. The CI passes the repository variable `ACCESS_LOGS_BUCKET`; unset, there are none.
+
 ## v1.4.1
 
 ### Fixed

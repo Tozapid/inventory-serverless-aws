@@ -180,7 +180,7 @@ resource "aws_cloudfront_distribution" "web" {
   #checkov:skip=CKV_AWS_68:WAFv2 costs about the whole monthly budget of this account.
   #checkov:skip=CKV2_AWS_47:No WAFv2 WebACL is attached.
   #checkov:skip=CKV_AWS_310:One S3 origin and one API origin are enough.
-  #checkov:skip=CKV_AWS_86:Legacy CloudFront access logs need a bucket ACL. API Gateway and Lambda log to CloudWatch instead.
+  #checkov:skip=CKV_AWS_86:The access logs are standard logging v2 (access-logs.tf); the legacy logging block needs a bucket ACL.
   #checkov:skip=CKV_AWS_174:The default CloudFront certificate does not allow choosing the TLS policy.
   #checkov:skip=CKV2_AWS_42:The demo runs on the *.cloudfront.net address with its default certificate, without a domain of its own.
   #checkov:skip=CKV_AWS_305:Geo restriction is not required for this private app.

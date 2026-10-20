@@ -65,6 +65,12 @@ variable "reset_schedule" {
   description = "When the demo is wiped back to its initial state. An empty string turns the reset off."
 }
 
+variable "access_logs_bucket" {
+  type        = string
+  default     = ""
+  description = "Bucket that the access logs of this site go to, such as the logs_bucket of an overview of the account (Tozapid/account-serverless-aws): the standard logs (v2) of the distribution under cloudfront/<name>/. Its policy has to let delivery.logs.amazonaws.com write there. Empty: no access logs."
+}
+
 variable "tags" {
   type = map(string)
   default = {
