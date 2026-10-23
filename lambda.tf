@@ -27,7 +27,11 @@ resource "aws_lambda_function" "api" {
   architectures = ["arm64"]
   handler       = "lambda_app.handler"
   memory_size   = 256
-  timeout       = 90
+  # API Gateway answers a request after 30 s anyway. The long limit is for the
+  # background recognition of every photo again: one call goes through about
+  # a box every few seconds and hands the rest to the next call a minute before
+  # its time is up, so a long run takes few calls.
+  timeout = 900
 
   filename         = data.archive_file.api.output_path
   source_code_hash = data.archive_file.api.output_base64sha256

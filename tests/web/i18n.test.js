@@ -35,8 +35,8 @@ test("no Russian text reaches the page without t()", () => {
   const bare = [...code.matchAll(/"((?:[^"\\\n]|\\.)*[А-Яа-яЁё](?:[^"\\\n]|\\.)*)"/g)]
     .filter((m) => !/(?<![\w.])t\(\s*$|\?\s*$|:\s*$/.test(code.slice(Math.max(0, m.index - 40), m.index)))
     .map((m) => m[1]);
-  // The one exception is the note the API writes itself, compared before translating.
-  assert.deepEqual(bare, ["Создание коробки"]);
+  // The exceptions are the notes the API writes itself, compared before translating.
+  assert.deepEqual(bare, ["Создание коробки", "Повторное распознавание", "Поворот"]);
 });
 
 for (const lang of OTHER) {

@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.6.0
+
+### Added
+
+- Trash: a deleted box is moved to Settings → Trash with its history and photos, after a confirmation that says so. Everyone restores a box from there; administrators delete it for good, history and photos included. The number of a box in the trash stays taken until then. The API keeps the card under `SK=TRASH`, listed from the `boxes` index under `gsi1pk = TRASH`: `GET /api/trash`, `POST /api/trash/<number>/restore`, `DELETE /api/trash/<number>` (administrators).
+- Photos in the history: every new or turned photo is an entry with the earlier and the new photo side by side, opened full size on click. Earlier photos stay in the bucket while an entry shows them; deleting the entry deletes such a photo.
+- Recognition: a prompt of your own in Settings → Recognition (empty is the built-in one; the answer language is added to it), and "Recognize all photos again" with the language chosen there. The prompt and model are saved first; the API goes through the boxes one at a time in the background (`POST /api/recognition/rerun`, stopped with `DELETE`), the tab shows how far it got, and each new description goes into the history as "Recognized again". The API function's time limit is now 900 s for these runs.
+- Leaving a card being edited asks first if anything changed: Cancel, Close, another box in the list, back and forward, the logo, closing the tab. So does hiding the new box form with something typed in it.
+
+### Changed
+
+- With a card open, the list narrows to a column of about a fifth of the page and the card takes the rest, with the photo and the text side by side on a wide card. Without a card the list keeps the page.
+- The description and contents fields grow with their text while it is typed.
+- The history of a card is folded under its heading, with the number of entries, and opens on a click.
+
+### Fixed
+
+- A photo saved while editing a card wiped the text typed so far about ten seconds later, when recognition finished and the card was drawn again. The photo description and the history are now redrawn on their own; so is the photo description shown or hidden with its button, which wiped the text the same way.
+- On an iPhone the page zoomed in on a field and no longer fitted the screen: fields use 16 px text on phones. The header of the page and of the card take less room there, and long words in a card wrap.
+
 ## v1.5.0
 
 ### Added
