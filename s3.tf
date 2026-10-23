@@ -4,6 +4,8 @@ resource "aws_s3_bucket" "web" {
   #checkov:skip=CKV2_AWS_62:This bucket only serves the static shell. Event notifications are not needed.
   #checkov:skip=CKV_AWS_18:CloudFront and the API carry the useful access trail. A second log bucket is not worth the ACL setup here.
   bucket = local.web_bucket
+  # The page is built from the repository: nothing here to keep.
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "web" {
@@ -86,6 +88,8 @@ resource "aws_s3_bucket" "media" {
   #checkov:skip=CKV2_AWS_62:Uploads are confirmed by the API. Bucket notifications are not needed.
   #checkov:skip=CKV_AWS_18:The bucket is private. Reads go through signed URLs issued by the API, which logs the caller.
   bucket = local.media_bucket
+  # The demo's media are the examples of the reset; a destroy takes them along.
+  force_destroy = var.demo
 }
 
 resource "aws_s3_bucket_public_access_block" "media" {
