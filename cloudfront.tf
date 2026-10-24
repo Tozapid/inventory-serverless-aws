@@ -38,7 +38,7 @@ resource "aws_ssm_parameter" "media_signing_key" {
 resource "aws_ssm_parameter" "media_key" {
   #checkov:skip=CKV2_AWS_34:Ids and a parameter name, nothing secret.
   count       = local.own_media_key ? 1 : 0
-  name        = "/${local.name}/cloudfront-key"
+  name        = "/${local.name}/cloudfront-private-key"
   description = "CloudFront key group and public key of the photo cookies, for previews."
   type        = "String"
   value = jsonencode({
@@ -50,7 +50,7 @@ resource "aws_ssm_parameter" "media_key" {
 
 data "aws_ssm_parameter" "shared_media_key" {
   count = local.own_media_key ? 0 : 1
-  name  = "/${local.media_key_from}/cloudfront-key"
+  name  = "/${local.media_key_from}/cloudfront-private-key"
 }
 
 # The key existed before it became optional.
