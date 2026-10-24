@@ -103,7 +103,9 @@ function fakeApi() {
   const seed = JSON.parse(fs.readFileSync(path.join(SEED, "boxes.json"), "utf8")).boxes;
   const boxes = new Map();
   const history = new Map();
+  const trash = new Map();
   const calls = [];
+  let rerun = null;
   const users = [
     { email: ADMIN.email, status: "CONFIRMED", enabled: true, admin: true, mfa: false, self: true },
     { email: "guest@example.com", status: "CONFIRMED", enabled: true, admin: false, mfa: true, self: false },
@@ -117,6 +119,8 @@ function fakeApi() {
     thumb_url: box.photo ? `/media/seed/photos/${box.photo}-thumb.jpg` : "",
     photo_url: box.photo ? `/media/seed/photos/${box.photo}.jpg` : "",
     hidden_text: box.hidden || "",
+    deleted_at: box.deleted_at,
+    deleted_by: box.deleted_at ? ADMIN.email : undefined,
     updated_at: box.updated || "2026-09-01T10:00:00Z",
     created_at: box.created || "2026-09-01T10:00:00Z",
     updated_by: ADMIN.email,
@@ -175,11 +179,50 @@ function fakeApi() {
     }
     if (method === "GET" && one) {
       const box = boxes.get(decodeURIComponent(one[1]));
+      // Recognition finishes by the first time the page asks again.
+      if (box && box.recognizing) [box.hidden, box.recognizing] = [box.recognizing, null];
       return box ? [200, card(box)] : [404, { error: "Box not found" }];
+    }
+    if (method === "DELETE" && one) {
+      const number = decodeURIComponent(one[1]);
+      trash.set(number, { ...boxes.get(number), deleted_at: "2026-10-20T10:00:00Z" });
+      boxes.delete(number);
+      return [200, { deleted: true, trash: true }];
+    }
+    const trashed = /^\/trash\/([^/]+)(\/restore)?$/.exec(url.pathname.replace(/^\/api/, ""));
+    if (route === "GET /trash") return [200, { items: [...trash.values()].map(card) }];
+    if (trashed && method === "POST") {
+      const number = decodeURIComponent(trashed[1]);
+      boxes.set(number, { ...trash.get(number), deleted_at: undefined });
+      trash.delete(number);
+      return [200, card(boxes.get(number))];
+    }
+    if (trashed && method === "DELETE") {
+      trash.delete(decodeURIComponent(trashed[1]));
+      return [200, { deleted: true }];
+    }
+    // Photos go to /upload, as to S3; completing one starts recognition.
+    const photo = /^\/boxes\/([^/]+)\/photo(\/complete)?$/.exec(url.pathname.replace(/^\/api/, ""));
+    if (photo && !photo[2]) {
+      const post = (kind) => ({ url: ORIGIN + "/upload", fields: { key: kind }, key: "boxes/" + photo[1] + "/" + kind + "/" + "a".repeat(32) + ".jpg" });
+      return [200, { original: post("original"), thumb: post("thumb") }];
+    }
+    if (photo) {
+      const box = boxes.get(decodeURIComponent(photo[1]));
+      Object.assign(box, { photo: "cables", hidden: "", recognizing: "A coil of blue cable" });
+      return [200, { ...card(box), recognition_pending: true }];
     }
     switch (route) {
       case "GET /settings":
-        return [200, { recognition: false, grok_key_set: false, grok_key_hint: "", grok_model: "" }];
+        return [200, { recognition: true, grok_key_set: true, grok_key_hint: "WXYZ", grok_model: "grok-4.7", grok_prompt: "", default_prompt: "List what is in the photo.", rerun }];
+      case "PUT /settings":
+        return [200, { saved: true }];
+      case "POST /recognition/rerun":
+        rerun = { status: "running", lang: body.lang, total: 4, done: 0, started_at: "2026-10-20T10:00:00Z" };
+        return [200, { rerun }];
+      case "DELETE /recognition/rerun":
+        rerun = { ...rerun, status: "stopped" };
+        return [200, { rerun }];
       case "GET /settings/recognition-log":
         return [200, { items: [
           { at: "2026-10-10T10:00:00Z", user: ADMIN.email, number: "2", status: "error", message: "The recognition service did not accept the photo", detail: "HTTP 400: {\"error\": \"Model not found\"}", model: "grok-4.7", duration_ms: 1234, chars: 0 },
@@ -214,7 +257,7 @@ function fakeApi() {
     }
   }
 
-  return { boxes, calls, handle, routes: (route) => calls.filter((call) => call.route === route) };
+  return { boxes, trash, calls, handle, routes: (route) => calls.filter((call) => call.route === route) };
 }
 
 const executablePath = chromePath();
@@ -252,6 +295,7 @@ async function openInventory(t, { signedIn = true, lang = "en", totp = false, re
       return request.respond({ status: 200, contentType: "text/javascript", headers: { "Access-Control-Allow-Origin": "*" }, body: QRCODE });
     }
     if (url.origin !== ORIGIN) return request.abort();
+    if (url.pathname === "/upload") return request.respond({ status: 204, body: "" });
     if (url.pathname.startsWith("/api/")) {
       const body = request.postData() ? JSON.parse(request.postData()) : null;
       const [status, data] = api.handle(request.method(), url, body);
@@ -367,12 +411,17 @@ test("an admin deletes a history entry", async (t) => {
   const wiki = await openInventory(t, { at: "/box/1" });
   if (!wiki) return;
   const { page, api } = wiki;
+  await page.waitForSelector(".history-block");
+  assert.equal(await page.$eval(".history-block", (node) => node.open), false, "folded until asked for");
+  assert.equal(await text(page, ".history-block summary"), "History2");
+  await page.click(".history-block summary");
   await page.waitForSelector(".history .event");
   assert.equal((await page.$$(".history .event")).length, 2);
   await page.click(".history .event .event-head button");
   await until(async () => (await page.$$(".history .event")).length === 1, "entry removed");
   assert.equal(api.calls.filter((call) => call.route.startsWith("DELETE /boxes/1/history/")).length, 1);
   assert.match(await text(page, ".history"), /Box created/, "the older entry stays");
+  assert.equal(await text(page, ".history-block summary"), "History1");
   await page.reload();
   await page.waitForSelector(".history .event");
   assert.equal((await page.$$(".history .event")).length, 1);
@@ -647,7 +696,7 @@ test("recognition settings stay hidden while recognition is off", async (t) => {
   if (!off) return;
   await openSettings(off.page, "Password");
   const tabs = await off.page.$$eval(".dialog [role=tab]", (nodes) => nodes.map((node) => node.textContent));
-  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Users", "Version"]);
+  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Trash", "Users", "Version"]);
   assert.equal(off.api.routes("GET /settings").length, 0);
 });
 
@@ -805,4 +854,141 @@ test("the interface follows the chosen language", async (t) => {
   await page.select(".lang-select", "it");
   await page.waitForFunction(() => document.documentElement.lang === "it" && document.querySelector(".login button.primary"));
   assert.equal(await text(page, ".login button.primary"), "Accedi");
+});
+
+test("an open card takes most of the width, the list a narrow column", async (t) => {
+  const wiki = await openInventory(t);
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  const widths = () => page.evaluate(() => ({
+    page: document.querySelector(".workspace").clientWidth,
+    list: document.getElementById("catalog").offsetWidth,
+    card: document.getElementById("detail").offsetWidth,
+  }));
+  const closed = await widths();
+  assert.ok(closed.list > closed.page * 0.6, "without a card the list is wide");
+  await page.click(".box-row");
+  await page.waitForSelector("#detail .detail-tools");
+  const open = await widths();
+  assert.ok(open.list <= open.page * 0.25, "the list narrows: " + open.list + " of " + open.page);
+  assert.ok(open.card > open.page * 0.7, "the card widens: " + open.card);
+  const [photo, text] = await page.$$eval("#detail .card-body > div", (nodes) => nodes.map((node) => node.getBoundingClientRect().top));
+  assert.equal(Math.round(photo), Math.round(text), "photo and text side by side");
+});
+
+test("on a phone nothing is wider than the screen, and fields do not make it zoom", async (t) => {
+  const wiki = await openInventory(t, { lang: "ru", recognition: true, at: "/box/2" });
+  if (!wiki) return;
+  const { page } = wiki;
+  await page.setViewport({ width: 375, height: 700, isMobile: true, hasTouch: true });
+  await page.reload();
+  await page.waitForSelector("#detail .detail-tools");
+  const wider = () => page.evaluate(() => {
+    const width = document.documentElement.clientWidth;
+    return [...document.querySelectorAll("body *")].filter((node) => node.getBoundingClientRect().right > width + 1).map((node) => node.className);
+  });
+  assert.deepEqual(await wider(), []);
+  assert.equal(await page.$eval(".search input", (node) => getComputedStyle(node).fontSize), "16px");
+  assert.equal(await page.$eval(".sort-select", (node) => getComputedStyle(node).fontSize), "16px");
+  await page.keyboard.press("Escape");
+  await clickText(page, "button", "Настройки");
+  await clickText(page, ".dialog [role=tab]", "Распознавание");
+  await page.waitForSelector(".recognition-log .log-entry");
+  assert.deepEqual(await wider(), []);
+});
+
+test("editing: the fields grow with the text, and Cancel and Close ask first", async (t) => {
+  const api = fakeApi();
+  api.boxes.get("2").contents = Array.from({ length: 30 }, (_, index) => "- item " + index).join("\n");
+  const wiki = await openInventory(t, { at: "/box/2", api });
+  if (!wiki) return;
+  const { page } = wiki;
+  const asked = [];
+  page.on("dialog", (dialog) => asked.push(dialog.message()));
+  await page.waitForSelector("#detail .detail-tools");
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  const fits = () => page.$$eval("#detail form.stack textarea", (nodes) => nodes.map((node) => node.scrollHeight <= node.clientHeight + 1));
+  assert.deepEqual(await fits(), [true, true], "the whole text shows");
+  assert.ok((await page.$$eval("#detail form.stack textarea", (nodes) => nodes[1].clientHeight)) > 400, "thirty lines of contents");
+  await page.focus("#detail form.stack textarea");
+  await page.keyboard.type("one\ntwo\nthree\nfour\nfive\n");
+  assert.deepEqual(await fits(), [true, true], "and keeps growing");
+
+  await clickText(page, "#detail form.stack button", "Cancel");
+  assert.deepEqual(asked, ["Discard unsaved changes?"]);
+  await until(async () => !(await page.$("#detail form.stack")), "left after the question");
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await clickText(page, "#detail form.stack button", "Cancel");
+  assert.equal(asked.length, 1, "nothing changed: no question");
+
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.type("#detail form.stack textarea", "x");
+  await clickText(page, "#detail .detail-tools button", "Close");
+  assert.equal(asked.length, 2);
+  await until(async () => (await page.evaluate(() => location.pathname)) === "/", "closed after the question");
+});
+
+test("a photo saved while editing keeps the text, recognition fills in on its own", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/4", recognition: true });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await page.waitForSelector("#detail .detail-tools");
+  await page.keyboard.press("KeyI");
+  await page.waitForSelector("#detail form.stack textarea");
+  await page.type("#detail form.stack textarea", "Typed before the photo");
+  const input = await page.$("#detail .file-label input");
+  await input.uploadFile(require("node:path").join(SEED, "photos", "cables-thumb.jpg"));
+  await until(() => api.routes("POST /boxes/4/photo/complete").length === 1, "photo saved");
+  await page.waitForSelector("#detail .recognition-slot .hidden-text", { timeout: 9000 });
+  assert.match(await page.$eval("#detail form.stack textarea", (node) => node.value), /Typed before the photo/, "the text stays");
+  await clickText(page, "#detail .hidden-text button", "Recognition");
+  assert.match(await text(page, "#detail .hidden-text"), /A coil of blue cable/);
+  await clickText(page, "#detail form.stack button", "Save");
+  await until(() => api.routes("PATCH /boxes/4").length === 1, "saved");
+  assert.match(api.routes("PATCH /boxes/4")[0].body.description, /Typed before the photo/);
+});
+
+test("trash: a deleted box is restored from the settings", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/3" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  const asked = [];
+  page.on("dialog", (dialog) => asked.push(dialog.message()));
+  await page.waitForSelector("#detail .detail-tools");
+  await page.keyboard.press("KeyI");
+  await clickText(page, "#detail form.stack button", "Delete");
+  await until(async () => !(await rowNumbers(page)).includes("3"), "gone from the list");
+  assert.deepEqual(asked, ["Delete box 3? It can be restored from the trash in the settings."]);
+
+  await openSettings(page, "Trash");
+  await page.waitForSelector(".trash-item");
+  assert.match(await text(page, ".trash-item"), /3Label printer/);
+  await clickText(page, ".trash-item button", "Restore");
+  await until(async () => (await rowNumbers(page)).includes("3"), "back in the list");
+  await page.waitForSelector(".settings-body .muted");
+  assert.equal(await text(page, ".settings-body"), "The trash is empty.");
+  assert.equal(api.trash.size, 0);
+});
+
+test("recognition: every photo again, with a prompt and a language", async (t) => {
+  const wiki = await openInventory(t, { recognition: true });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  await openSettings(page, "Recognition");
+  await page.waitForSelector(".settings-body textarea");
+  assert.equal(await page.$eval(".settings-body textarea", (node) => node.placeholder), "List what is in the photo.");
+  await page.type(".settings-body textarea", "Only tools and their sizes.");
+  await page.select(".rerun select", "it");
+  await clickText(page, ".rerun button", "Recognize all photos again");
+  await until(() => api.routes("POST /recognition/rerun").length === 1, "started");
+  assert.equal(api.routes("PUT /settings")[0].body.grok_prompt, "Only tools and their sizes.", "the prompt is saved first");
+  assert.equal(api.routes("POST /recognition/rerun")[0].body.lang, "it");
+  await until(async () => (await text(page, ".rerun")).includes("Running: 0 of 4"), "progress shown");
+  await clickText(page, ".rerun button", "Stop");
+  await until(async () => (await text(page, ".rerun")).includes("Stopped: 0 of 4"), "stopped");
 });

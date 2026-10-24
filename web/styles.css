@@ -432,17 +432,20 @@ h3 { font-size: 15px; }
 .who { display: flex; gap: 4px; align-items: center; }
 .who span { margin-right: 4px; }
 
+/* Without a card the list takes the page; an open card takes most of it and
+   the list keeps a narrow column beside it. */
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 420px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 20px;
   padding: 20px;
   align-items: start;
 }
+.workspace:has(> .detail:not(.is-empty)) { grid-template-columns: clamp(260px, 20%, 360px) minmax(0, 1fr); }
 
 .catalog { min-width: 0; }
 
-.toolbar, .row-actions, .history-head {
+.toolbar, .row-actions {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -579,16 +582,31 @@ h3 { font-size: 15px; }
   top: 76px;
   max-height: calc(100vh - 96px);
   overflow: auto;
+  container-type: inline-size;
 }
 
-.detail-tools { display: flex; justify-content: flex-end; gap: 8px; }
-.photo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+/* The photo and the text: one under the other, side by side on a wide card. */
+.card-body { display: grid; gap: 12px; margin-top: 12px; }
+.card-media, .card-text { display: grid; gap: 8px; align-content: start; min-width: 0; }
+@container (min-width: 720px) {
+  .card-body { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 20px; align-items: start; }
+}
+.card-text textarea { min-height: 5.5em; }
+
+.detail-tools { display: flex; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.photo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-label { cursor: pointer; }
 .file-label input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.frame { width: 100%; aspect-ratio: 4 / 3; margin: 12px 0 8px; border-radius: var(--radius); }
+.frame { width: 100%; aspect-ratio: 4 / 3; max-height: 70vh; border-radius: var(--radius); }
 .frame button { width: 100%; height: 100%; padding: 0; border: 0; background: transparent; }
 
 .detail-head, .stack { display: grid; gap: 8px; }
+/* The name and the buttons share a line; on a narrow card the buttons go
+   above. */
+/* With wrap-reverse the cross axis runs upwards: flex-end is the top. */
+.detail-top { display: flex; flex-wrap: wrap-reverse; justify-content: space-between; align-items: flex-end; gap: 8px 16px; }
+.detail-top .detail-head { flex: 1 1 260px; min-width: 0; }
+.detail-head h2 { overflow-wrap: anywhere; }
 .detail-head { grid-template-columns: auto 1fr; align-items: start; }
 
 .history { display: grid; gap: 10px; margin-top: 12px; }
@@ -606,6 +624,7 @@ h3 { font-size: 15px; }
   border-radius: var(--radius);
   padding: 10px 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .md :first-child { margin-top: 0; }
 .md :last-child { margin-bottom: 0; }
@@ -617,8 +636,17 @@ h3 { font-size: 15px; }
 .md pre code { padding: 0; background: transparent; }
 .md blockquote { padding-left: 0.8em; border-left: 3px solid var(--line-strong); color: var(--muted); }
 button.tiny { padding: 3px 8px; font-size: 12px; }
-.hidden-text { margin-top: 8px; }
-.detail .history-head { margin-top: 20px; }
+.hidden-text { display: grid; gap: 6px; justify-items: start; }
+.hidden-text .md { justify-self: stretch; }
+
+/* The history, folded until asked for. */
+.history-block { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+.history-block summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; list-style: none; }
+.history-block summary::-webkit-details-marker { display: none; }
+.history-block summary::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform 0.15s; }
+.history-block[open] summary::before { transform: rotate(90deg); }
+.history-photo { display: block; border-radius: var(--radius); overflow: hidden; background: var(--surface-2); }
+.history-photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
 
 /* The photo viewer stays dark in both themes. */
 .lightbox {
@@ -652,9 +680,11 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
 .back { display: inline-flex; }
 
 @media (max-width: 900px) {
-  .top { flex-wrap: wrap; position: static; }
+  .top { flex-wrap: wrap; position: static; gap: 8px 12px; padding: 8px 12px; }
+  .brand { min-width: 0; flex: 1; }
+  .brand span { display: none; }
   .search { order: 3; flex-basis: 100%; }
-  .workspace { grid-template-columns: 1fr; padding: 12px; }
+  .workspace, .workspace:has(> .detail:not(.is-empty)) { grid-template-columns: 1fr; padding: 12px; }
   .detail {
     position: fixed;
     inset: 0;
@@ -667,6 +697,8 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
   .gallery { grid-template-columns: repeat(auto-fill, minmax(max(140px, calc((100% - 12px) / 2)), 1fr)); }
   .diff { grid-template-columns: 1fr; }
   .who span { display: none; }
+  .detail { padding: 12px; }
+  .frame { max-height: 50vh; }
 }
 
 #catalog-head { flex-wrap: wrap; }
@@ -728,7 +760,7 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
   .label-page .label { outline: 0.2mm dashed #999; outline-offset: -0.1mm; }
 }
 
-.log-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 18px; }
+.log-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 18px; }
 .recognition-log { display: grid; gap: 8px; }
 .log-scope { display: flex; gap: 4px; margin-left: auto; }
 .dialog .log-scope button { padding: 3px 10px; font-size: 13px; }
@@ -741,3 +773,20 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
 .log-status.ok { color: var(--ok); }
 .log-status.bad { color: var(--danger); }
 .log-detail { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: var(--surface-2); border-radius: 6px; padding: 8px; margin: 4px 0 0; max-height: 200px; overflow: auto; }
+
+.rerun { display: grid; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.rerun h3 { margin: 0; }
+.rerun select { justify-self: start; min-width: 200px; }
+
+.trash { display: grid; gap: 8px; }
+.trash-item { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.trash-copy { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.trash-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.dialog .trash-actions button { padding: 4px 12px; font-size: 13px; }
+
+/* Phones zoom into a field typed in with a font under 16px and stay zoomed,
+   so that the page no longer fits the screen. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+@media (max-width: 900px), (pointer: coarse) {
+  input:not([type=checkbox], [type=radio], [type=file]), textarea, select, .sort-select, .lang-select { font-size: 16px; }
+}

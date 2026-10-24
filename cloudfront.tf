@@ -1,26 +1,78 @@
+# The key that signs the photo cookies. An account holds at most ten CloudFront
+# public keys, and the limit is not raised, so a preview (<name>-pr<N>) does
+# not make one: it signs with the key of the main site, whose ids the main site
+# publishes in /<name>/cloudfront-key-ids. The main site has to be deployed with
+# that parameter before a preview. media_key_from picks another stack, or ""
+# for a key of its own.
 resource "tls_private_key" "media" {
+  count     = local.own_media_key ? 1 : 0
   algorithm = "RSA"
   rsa_bits  = 2048
 }
 
 resource "aws_cloudfront_public_key" "media" {
+  count       = local.own_media_key ? 1 : 0
   provider    = aws.global
   name        = "${local.name}-media"
-  encoded_key = tls_private_key.media.public_key_pem
+  encoded_key = tls_private_key.media[0].public_key_pem
 }
 
 resource "aws_cloudfront_key_group" "media" {
+  count    = local.own_media_key ? 1 : 0
   provider = aws.global
   name     = "${local.name}-media"
-  items    = [aws_cloudfront_public_key.media.id]
+  items    = [aws_cloudfront_public_key.media[0].id]
 }
 
 resource "aws_ssm_parameter" "media_signing_key" {
   #checkov:skip=CKV_AWS_337:The AWS managed SSM key is enough for this CloudFront signing key.
+  count       = local.own_media_key ? 1 : 0
   name        = "/${local.name}/cloudfront-private-key"
   description = "Private key used to sign CloudFront cookies for inventory photos."
   type        = "SecureString"
-  value       = tls_private_key.media.private_key_pem
+  value       = tls_private_key.media[0].private_key_pem
+}
+
+# The ids a preview needs to sign with this key; the private key stays in its
+# own SecureString parameter.
+resource "aws_ssm_parameter" "media_key" {
+  #checkov:skip=CKV2_AWS_34:Ids and a parameter name, nothing secret.
+  count       = local.own_media_key ? 1 : 0
+  name        = "/${local.name}/cloudfront-key-ids"
+  description = "CloudFront key group and public key of the photo cookies, for previews."
+  type        = "String"
+  value = jsonencode({
+    key_group_id          = aws_cloudfront_key_group.media[0].id
+    public_key_id         = aws_cloudfront_public_key.media[0].id
+    private_key_parameter = aws_ssm_parameter.media_signing_key[0].name
+  })
+}
+
+# The ids as JSON, not the private key next to them.
+data "aws_ssm_parameter" "shared_media_key" {
+  count = local.own_media_key ? 0 : 1
+  name  = "/${local.media_key_from}/cloudfront-key-ids"
+}
+
+# The key existed before it became optional.
+moved {
+  from = tls_private_key.media
+  to   = tls_private_key.media[0]
+}
+
+moved {
+  from = aws_cloudfront_public_key.media
+  to   = aws_cloudfront_public_key.media[0]
+}
+
+moved {
+  from = aws_cloudfront_key_group.media
+  to   = aws_cloudfront_key_group.media[0]
+}
+
+moved {
+  from = aws_ssm_parameter.media_signing_key
+  to   = aws_ssm_parameter.media_signing_key[0]
 }
 
 resource "aws_cloudfront_function" "api_host" {
@@ -263,7 +315,7 @@ resource "aws_cloudfront_distribution" "web" {
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
     cache_policy_id        = aws_cloudfront_cache_policy.media.id
-    trusted_key_groups     = [aws_cloudfront_key_group.media.id]
+    trusted_key_groups     = [local.media_key.key_group_id]
 
     response_headers_policy_id = aws_cloudfront_response_headers_policy.media.id
 

@@ -24,6 +24,7 @@
     lightbox: -1,
     editing: false,
     showHidden: false,
+    historyOpen: false,
     awaitRecognition: null,
     urlsExpireAt: null,
   };
@@ -313,6 +314,8 @@
 
   let photoBusy = false;
 
+  // The card may be being edited while the photo is saved: only the photo,
+  // its description and the history are redrawn, never the form.
   async function saveCardPhoto(file, turn) {
     const number = state.selected;
     if (!number || photoBusy) return;
@@ -340,6 +343,7 @@
           el("img", { src: saved.photo_url, alt: t("Коробка {number}", { number: saved.number }) }),
         ]));
       }
+      refreshRecognition();
       const savedMessage = saved.recognition_pending
         ? t("Фотография сохранена, распознавание запущено")
         : t("Фотография сохранена");
@@ -347,6 +351,7 @@
       toast(savedMessage);
       if (saved.recognition_pending) {
         state.awaitRecognition = number;
+        refreshRecognition();
         watchRecognition(number);
       }
       await reloadHistory(number);
@@ -645,7 +650,10 @@
     );
     const slot = document.getElementById("composer-slot");
     if (!composerOpen) slot.replaceChildren();
-    else if (!slot.querySelector("form")) slot.replaceChildren(composerNode());
+    else if (!slot.querySelector("form")) {
+      slot.replaceChildren(composerNode());
+      slot.querySelectorAll("textarea").forEach(fitHeight);
+    }
     const body = state.loading
       ? el("p", { class: "muted" }, t("Загрузка…"))
       : state.items.length
@@ -661,7 +669,10 @@
 
   let composerOpen = false;
 
+  // Closing a form with something typed in it asks first.
   function toggleComposer() {
+    const form = document.querySelector("form.composer");
+    if (composerOpen && form && formHasText(form) && !window.confirm(t("Отменить несохранённые изменения?"))) return;
     composerOpen = !composerOpen;
     renderCatalog();
   }
@@ -805,11 +816,20 @@
   // ticket it would redraw the card over an edit started since.
   let openTicket = 0;
 
+  // mode: how the address changes ("push", "replace", "none"); "reload"
+  // redraws the card being edited with what the API has now.
   async function openBox(number, mode) {
+    if (state.editing && state.selected === number && mode !== "reload") return;
+    if (state.selected !== number && !confirmDiscard()) {
+      // Back or forward has already changed the address: put it back.
+      if (mode === "none") setRoute(state.selected, "push");
+      return;
+    }
     const ticket = ++openTicket;
     if (state.selected !== number) {
       state.editing = false;
       state.showHidden = false;
+      state.historyOpen = false;
     }
     state.selected = number;
     setRoute(number, mode || "push");
@@ -848,11 +868,13 @@
   }
 
   function closeDetail() {
+    if (!confirmDiscard()) return;
     state.selected = null;
     state.detail = null;
     state.history = [];
     state.editing = false;
     state.showHidden = false;
+    state.historyOpen = false;
     state.awaitRecognition = null;
     clearTimeout(recognitionTimer);
     setRoute(null, "push");
@@ -860,15 +882,21 @@
     renderDetail();
   }
 
+  // The history is redrawn in place, so a card being edited keeps its text.
   async function reloadHistory(number) {
     try {
       const history = await api("/boxes/" + encodeURIComponent(number) + "/history");
       if (state.selected !== number) return;
       state.history = history.items || [];
-      if (!state.editing) renderDetail();
+      document.querySelector("#detail .history-block")?.replaceWith(historyBlock());
     } catch (error) {
       // The card keeps the history it has.
     }
+  }
+
+  function refreshRecognition() {
+    const slot = document.querySelector("#detail .recognition-slot");
+    if (slot && state.detail) slot.replaceChildren(...[recognitionControl(state.detail)].filter(Boolean));
   }
 
   let recognitionTimer = null;
@@ -882,10 +910,12 @@
       try {
         const fresh = await api("/boxes/" + encodeURIComponent(number));
         if (state.selected !== number) return;
+        // Only the description is taken: recognition changes nothing else, and
+        // redrawing the whole card would throw away an edit in progress.
         if (String(fresh.hidden_text || "").trim()) {
           state.awaitRecognition = null;
-          state.detail = fresh;
-          renderDetail();
+          if (state.detail && state.detail.number === number) state.detail.hidden_text = fresh.hidden_text;
+          refreshRecognition();
           reloadHistory(number);
           return;
         }
@@ -893,7 +923,10 @@
         return;
       }
       if (tries < 12) recognitionTimer = setTimeout(tick, 5000);
-      else state.awaitRecognition = null;
+      else {
+        state.awaitRecognition = null;
+        refreshRecognition();
+      }
     };
     recognitionTimer = setTimeout(tick, 5000);
   }
@@ -910,7 +943,7 @@
         type: "button",
         onclick: () => {
           state.showHidden = !state.showHidden;
-          renderDetail();
+          refreshRecognition();
         },
       }, state.showHidden ? t("Скрыть") : t("Распознавание")),
       state.showHidden ? markdownNode(hidden) : null,
@@ -941,52 +974,52 @@
         el("img", { src: card.photo_url, alt: t("Коробка {number}", { number: card.number }) }),
       ])
       : el("span", { class: "muted" }, t("Фотографии пока нет"));
-    const chrome = [
-      el("div", { class: "detail-tools" }, [
-        state.editing ? null : el("button", {
-          class: "primary",
-          type: "button",
-          title: "I",
-          onclick: startEditing,
-        }, t("Редактировать")),
-        el("button", {
-          class: "ghost",
-          type: "button",
-          title: t("Закрыть карточку и не записывать текст"),
-          onclick: closeDetail,
-        }, t("Закрыть")),
-      ]),
-      el("div", { class: "detail-head" }, [
-        el("span", { class: "plate" }, card.number),
-        el("div", {}, [
-          el("h2", {}, plainTitle(card.description) || t("Без описания")),
-          el("div", { class: "link-line" }, [
-            el("a", {
-              class: "card-link",
-              href: boxPath(card.number),
-              onclick: (event) => followLink(event, () => {}),
-            }, boxPath(card.number)),
-            el("button", {
-              class: "copy",
-              type: "button",
-              title: t("Скопировать ссылку"),
-              "aria-label": t("Скопировать ссылку"),
-              onclick: async () => {
-                const url = location.origin + boxPath(card.number);
-                try {
-                  await navigator.clipboard.writeText(url);
-                  toast(t("Ссылка скопирована"));
-                } catch (copyError) {
-                  toast(url);
-                }
-              },
-            }, [copyIcon()]),
-          ]),
-          el("p", { class: "muted small" }, t("Обновил {who} · {when}", { who: card.updated_by || "—", when: formatWhen(card.updated_at) })),
+    const tools = el("div", { class: "detail-tools" }, [
+      state.editing ? null : el("button", {
+        class: "primary",
+        type: "button",
+        title: "I",
+        onclick: startEditing,
+      }, t("Редактировать")),
+      el("button", {
+        class: "ghost",
+        type: "button",
+        title: t("Закрыть карточку и не записывать текст"),
+        onclick: closeDetail,
+      }, t("Закрыть")),
+    ]);
+    const head = el("div", { class: "detail-head" }, [
+      el("span", { class: "plate" }, card.number),
+      el("div", {}, [
+        el("h2", {}, plainTitle(card.description) || t("Без описания")),
+        el("div", { class: "link-line" }, [
+          el("a", {
+            class: "card-link",
+            href: boxPath(card.number),
+            onclick: (event) => followLink(event, () => {}),
+          }, boxPath(card.number)),
+          el("button", {
+            class: "copy",
+            type: "button",
+            title: t("Скопировать ссылку"),
+            "aria-label": t("Скопировать ссылку"),
+            onclick: async () => {
+              const url = location.origin + boxPath(card.number);
+              try {
+                await navigator.clipboard.writeText(url);
+                toast(t("Ссылка скопирована"));
+              } catch (copyError) {
+                toast(url);
+              }
+            },
+          }, [copyIcon()]),
         ]),
+        el("p", { class: "muted small" }, t("Обновил {who} · {when}", { who: card.updated_by || "—", when: formatWhen(card.updated_at) })),
       ]),
-      el("div", { class: "frame" }, image),
-    ];
+    ]);
+    const frame = el("div", { class: "frame" }, image);
+    // The photo description, redrawn on its own when recognition finishes.
+    const recognition = el("div", { class: "recognition-slot" }, [recognitionControl(card)].filter(Boolean));
     const photoActions = el("div", { class: "photo-actions" }, [
       el("button", {
         class: "primary",
@@ -1017,86 +1050,88 @@
       }, "↻") : null,
       el("span", { class: "photo-status muted small" }, t("⌘V тоже сохраняет фотографию сразу")),
     ].filter(Boolean));
+    // On a wide card the photo and the text stand side by side.
+    const body = (media, text) => el("div", { class: "card-body" }, [
+      el("div", { class: "card-media" }, media),
+      el("div", { class: "card-text" }, text),
+    ]);
     if (!state.editing) {
       const description = String(card.description || "");
       const formattedDescription = description.trim() && description.trim() !== plainTitle(description)
         ? markdownNode(description)
         : null;
-      node.replaceChildren(...chrome.concat([
-        formattedDescription,
-        markdownNode(card.contents || ""),
-        recognitionControl(card),
-        el("div", { class: "history-head" }, [el("h3", {}, t("История изменений"))]),
-        renderHistory(),
-      ]).filter(Boolean));
+      node.replaceChildren(
+        el("div", { class: "detail-top" }, [head, tools]),
+        body([frame, recognition], [formattedDescription, markdownNode(card.contents || "")].filter(Boolean)),
+        historyBlock()
+      );
       return;
     }
-    const description = el("textarea", { maxlength: "4000" }, card.description || "");
-    const contents = el("textarea", { maxlength: "20000" }, card.contents || "");
+    const description = el("textarea", { maxlength: "4000", rows: "3" }, card.description || "");
+    const contents = el("textarea", { maxlength: "20000", rows: "8" }, card.contents || "");
     const note = el("input", { maxlength: "500", placeholder: t("Зачем поменяли содержимое") });
     const error = el("p", { class: "error" });
-    node.replaceChildren(
-      ...chrome,
-      photoActions,
-      el("form", {
-        class: "stack",
-        onsubmit: async (event) => {
-          event.preventDefault();
-          error.textContent = "";
-          try {
-            const saved = await api("/boxes/" + encodeURIComponent(card.number), {
-              method: "PATCH",
-              body: {
-                description: description.value,
-                contents: contents.value,
-                note: note.value,
-                version: card.version,
-              },
-            });
+    const form = el("form", {
+      class: "stack",
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.textContent = "";
+        try {
+          const saved = await api("/boxes/" + encodeURIComponent(card.number), {
+            method: "PATCH",
+            body: {
+              description: description.value,
+              contents: contents.value,
+              note: note.value,
+              version: card.version,
+            },
+          });
+          state.editing = false;
+          state.detail = saved;
+          await openBox(card.number);
+          await loadBoxes(false);
+          toast(t("Карточка сохранена"));
+        } catch (err) {
+          error.textContent = err.message;
+          if (err.status === 409) openBox(card.number, "reload");
+        }
+      },
+    }, [
+      el("label", {}, [t("Описание"), description]),
+      el("label", {}, [t("Содержимое, можно с markdown"), contents]),
+      el("label", {}, [t("Комментарий к изменению содержимого"), note]),
+      el("div", { class: "row-actions" }, [
+        el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Сохранить")),
+        el("button", {
+          class: "ghost",
+          type: "button",
+          onclick: () => {
+            if (!confirmDiscard()) return;
             state.editing = false;
-            state.detail = saved;
-            await openBox(card.number);
-            await loadBoxes(false);
-            toast(t("Карточка сохранена"));
-          } catch (err) {
-            error.textContent = err.message;
-            if (err.status === 409) openBox(card.number);
-          }
-        },
-      }, [
-        el("label", {}, [t("Описание"), description]),
-        el("label", {}, [t("Содержимое, можно с markdown"), contents]),
-        el("label", {}, [t("Комментарий к изменению содержимого"), note]),
-        el("div", { class: "row-actions" }, [
-          el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Сохранить")),
-          el("button", {
-            class: "ghost",
-            type: "button",
-            onclick: () => {
+            renderDetail();
+          },
+        }, t("Отмена")),
+        el("button", {
+          class: "danger",
+          type: "button",
+          onclick: async () => {
+            if (!window.confirm(t("Удалить коробку {number}? Её можно будет восстановить из корзины в настройках.", { number: card.number }))) return;
+            try {
+              await api("/boxes/" + encodeURIComponent(card.number), { method: "DELETE" });
               state.editing = false;
-              renderDetail();
-            },
-          }, t("Отмена")),
-          el("button", {
-            class: "danger",
-            type: "button",
-            onclick: async () => {
-              if (!window.confirm(t("Удалить коробку {number}?", { number: card.number }))) return;
-              try {
-                await api("/boxes/" + encodeURIComponent(card.number), { method: "DELETE" });
-                closeDetail();
-                await loadBoxes(false);
-              } catch (err) {
-                error.textContent = err.message;
-              }
-            },
-          }, t("Удалить")),
-        ]),
-        error,
+              closeDetail();
+              await loadBoxes(false);
+              toast(t("Коробка {number} в корзине", { number: card.number }));
+            } catch (err) {
+              error.textContent = err.message;
+            }
+          },
+        }, t("Удалить")),
       ]),
-      el("div", { class: "history-head" }, [el("h3", {}, t("История изменений"))]),
-      renderHistory()
-    );
+      error,
+    ]);
+    node.replaceChildren(el("div", { class: "detail-top" }, [head, tools]), body([frame, photoActions, recognition], [form]), historyBlock());
+    [description, contents].forEach(fitHeight);
   }
 
   function refreshDetailPhoto() {
@@ -1267,6 +1302,23 @@
       .trim();
   }
 
+  // A text field as tall as its text, growing while it is typed. It has to be
+  // in the page to be measured; the CSS keeps a few lines at least.
+  function fitHeight(field) {
+    if (!field.dataset.fits) {
+      field.dataset.fits = "1";
+      field.addEventListener("input", () => fitHeight(field));
+    }
+    // Shrinking the field for a moment must not scroll the card or the page.
+    const card = field.closest("#detail");
+    const [cardTop, pageTop] = [card ? card.scrollTop : 0, window.scrollY];
+    field.style.height = "auto";
+    const border = field.offsetHeight - field.clientHeight;
+    field.style.height = field.scrollHeight + border + "px";
+    if (card) card.scrollTop = cardTop;
+    window.scrollTo(window.scrollX, pageTop);
+  }
+
   function markdownField(label, field, preview) {
     field.addEventListener("input", () => fillMarkdown(preview, field.value));
     fillMarkdown(preview, field.value);
@@ -1279,12 +1331,15 @@
   // The API writes this note itself when a box is created; people's own notes
   // stay as they were typed.
   function historyNote(note) {
-    return note === "Создание коробки" ? t("Создание коробки") : note;
+    if (note === "Создание коробки") return t("Создание коробки");
+    if (note === "Повторное распознавание") return t("Повторное распознавание");
+    if (note === "Поворот") return t("Поворот");
+    return note;
   }
 
-  // Only administrators see the button; the API checks it again. The entry is
-  // removed in place, so a card being edited keeps what was typed.
-  async function deleteHistoryEntry(item, node) {
+  // Only administrators see the button; the API checks it again. The history
+  // is redrawn in place, so a card being edited keeps what was typed.
+  async function deleteHistoryEntry(item) {
     const number = state.selected;
     if (!number || !window.confirm(t("Удалить эту запись из истории? Вернуть её будет нельзя."))) return;
     try {
@@ -1295,8 +1350,32 @@
     }
     if (state.selected !== number) return;
     state.history = state.history.filter((entry) => entry.id !== item.id);
-    if (node) node.remove();
+    document.querySelector("#detail .history-block")?.replaceWith(historyBlock());
     toast(t("Запись удалена из истории"));
+  }
+
+  // The history is folded away until asked for; it stays open while the same
+  // card is shown.
+  function historyBlock() {
+    const block = el("details", {
+      class: "history-block",
+      ontoggle: () => { state.historyOpen = block.open; },
+    }, [
+      el("summary", {}, [
+        el("h3", {}, t("История изменений")),
+        state.history.length ? el("span", { class: "muted small" }, String(state.history.length)) : null,
+      ]),
+      renderHistory(),
+    ]);
+    block.open = state.historyOpen;
+    return block;
+  }
+
+  function historyPhoto(photo, thumb) {
+    if (!thumb) return el("p", { class: "muted small" }, t("нет фото"));
+    return el("a", { class: "history-photo", href: photo || thumb, target: "_blank", rel: "noopener" }, [
+      el("img", { src: thumb, alt: t("Фотография"), loading: "lazy" }),
+    ]);
   }
 
   function renderHistory() {
@@ -1305,19 +1384,24 @@
       el("div", { class: "event-head" }, [
         el("strong", {}, formatWhen(item.at)),
         state.admin && item.id
-          ? el("button", { class: "ghost tiny", type: "button", onclick: (event) => deleteHistoryEntry(item, event.currentTarget.closest(".event")) }, t("Удалить"))
+          ? el("button", { class: "ghost tiny", type: "button", onclick: () => deleteHistoryEntry(item) }, t("Удалить"))
           : null,
       ]),
       el("span", { class: "muted small" }, [
-        item.field === "hidden_text" ? t("Описание фото") : t("Содержимое"),
+        item.field === "hidden_text" ? t("Описание фото") : item.field === "photo" ? t("Фотография") : t("Содержимое"),
         " · ",
         item.by || "—",
         item.note ? " · " + historyNote(item.note) : "",
       ]),
-      el("div", { class: "diff" }, [
-        el("div", {}, [el("span", { class: "muted small" }, t("Было")), markdownNode(item.before)]),
-        el("div", {}, [el("span", { class: "muted small" }, t("Стало")), markdownNode(item.after)]),
-      ]),
+      item.field === "photo"
+        ? el("div", { class: "diff" }, [
+          el("div", {}, [el("span", { class: "muted small" }, t("Было")), historyPhoto(item.before_photo_url, item.before_thumb_url)]),
+          el("div", {}, [el("span", { class: "muted small" }, t("Стало")), historyPhoto(item.after_photo_url, item.after_thumb_url)]),
+        ])
+        : el("div", { class: "diff" }, [
+          el("div", {}, [el("span", { class: "muted small" }, t("Было")), markdownNode(item.before)]),
+          el("div", {}, [el("span", { class: "muted small" }, t("Стало")), markdownNode(item.after)]),
+        ]),
     ])));
   }
 
@@ -1485,6 +1569,7 @@
     if (config.recognition) sections.push(["recognition", t("Распознавание")]);
     sections.push(["language", t("Язык")]);
     sections.push(["labels", t("Этикетки")]);
+    sections.push(["trash", t("Корзина")]);
     if (state.admin) sections.push(["users", t("Пользователи")]);
     sections.push(["version", t("Версия")]);
     let current = sections.some(([key]) => key === section) ? section : "password";
@@ -1516,6 +1601,7 @@
       else if (current === "version") versionSection(body);
       else if (current === "users") usersSection(body);
       else if (current === "labels") labelsSection(body);
+      else if (current === "trash") trashSection(body);
       else if (current === "recognition") recognitionSection(body, wrap);
       else if (current === "totp") totpSection(body);
       else passwordSection(body, wrap);
@@ -1812,6 +1898,58 @@
     window.print();
   }
 
+  // Deleted boxes wait in the trash with their history and photos. Everyone
+  // restores them; administrators delete them for good.
+  async function trashSection(body) {
+    body.append(el("p", { class: "muted" }, t("Загрузка…")));
+    let items;
+    try {
+      items = (await api("/trash")).items || [];
+    } catch (error) {
+      body.replaceChildren(el("p", { class: "error" }, error.message));
+      return;
+    }
+    if (!items.length) {
+      body.replaceChildren(el("p", { class: "muted" }, t("Корзина пуста.")));
+      return;
+    }
+    const act = async (item, action) => {
+      try {
+        if (action === "restore") {
+          await api("/trash/" + encodeURIComponent(item.number) + "/restore", { method: "POST" });
+          toast(t("Коробка {number} восстановлена", { number: item.number }));
+          loadBoxes(false);
+        } else {
+          if (!window.confirm(t("Удалить коробку {number} навсегда? С ней удалятся её история и фотографии.", { number: item.number }))) return;
+          await api("/trash/" + encodeURIComponent(item.number), { method: "DELETE" });
+          toast(t("Коробка {number} удалена навсегда", { number: item.number }));
+        }
+      } catch (error) {
+        toast(error.message);
+        return;
+      }
+      body.replaceChildren();
+      trashSection(body);
+    };
+    body.replaceChildren(
+      el("p", { class: "hint" }, t("Удалённые коробки лежат здесь вместе с историей и фотографиями, пока их не восстановят или не удалят навсегда. Номер коробки в корзине занят.")),
+      el("div", { class: "trash" }, items.map((item) => el("article", { class: "trash-item" }, [
+        photoSlot(item.thumb_url, item.number, "thumb", true),
+        el("div", { class: "trash-copy" }, [
+          el("span", { class: "box-title" }, [
+            el("span", { class: "plate" }, item.number),
+            el("strong", {}, plainTitle(item.description) || t("Без описания")),
+          ]),
+          el("span", { class: "muted small" }, t("Удалил {who} · {when}", { who: item.deleted_by || "—", when: formatWhen(item.deleted_at) })),
+          el("div", { class: "trash-actions" }, [
+            el("button", { type: "button", class: "primary", onclick: () => act(item, "restore") }, t("Восстановить")),
+            state.admin ? el("button", { type: "button", class: "danger", onclick: () => act(item, "purge") }, t("Удалить навсегда")) : null,
+          ]),
+        ]),
+      ]))),
+    );
+  }
+
   // The version of the site and the releases of the demo repository that came
   // after it, with their notes. The API reads them from GitHub and keeps them
   // an hour.
@@ -1905,11 +2043,17 @@
       placeholder: settings.grok_key_set ? t("Введите новый, чтобы заменить") : "",
     });
     const model = el("input", { type: "text", autocomplete: "off", value: settings.grok_model || "grok-4.7", placeholder: "grok-4.7" });
+    // Empty is the built-in prompt, shown as the placeholder.
+    const prompt = el("textarea", { maxlength: "4000", rows: "3", placeholder: settings.default_prompt || "" }, settings.grok_prompt || "");
     const error = el("p", { class: "error", role: "alert" });
+    const store = (extra) => api("/settings", {
+      method: "PUT",
+      body: Object.assign({ grok_api_key: apiKey.value.trim(), grok_model: model.value.trim() || "grok-4.7", grok_prompt: prompt.value.trim() }, extra),
+    });
     const save = async (extra) => {
       error.textContent = "";
       try {
-        await api("/settings", { method: "PUT", body: Object.assign({ grok_api_key: apiKey.value.trim(), grok_model: model.value.trim() || "grok-4.7" }, extra) });
+        await store(extra);
         wrap.remove();
         toast(t("Настройки сохранены"));
       } catch (saveError) {
@@ -1931,6 +2075,8 @@
       el("label", {}, [t("API-ключ Grok"), apiKey]),
       el("p", { class: "hint" }, keyState),
       el("label", {}, [t("Модель"), model]),
+      el("label", {}, [t("Промпт"), prompt]),
+      el("p", { class: "hint" }, t("Пусто — встроенный промпт. Язык ответа добавляется к промпту сам.")),
       el("div", { class: "dialog-actions" }, [
         settings.grok_key_set
           ? el("button", {
@@ -1945,6 +2091,8 @@
       ].filter(Boolean)),
       error,
     ]));
+    fitHeight(prompt);
+    body.append(rerunBlock(settings.rerun, store));
     // Administrators can switch to everyone's attempts.
     let everyone = false;
     const log = el("div", { class: "recognition-log" });
@@ -1975,6 +2123,52 @@
       log,
     );
     show();
+  }
+
+  // Every photo recognized again with the model and the prompt above (saved
+  // first) and the language chosen here. The API goes through the boxes one
+  // by one in the background; the log below shows each attempt.
+  function rerunBlock(initial, store) {
+    const lang = el("select", { "aria-label": t("Язык описания") }, I18n.languages.map(([code, name]) => el("option", { value: code, selected: code === I18n.lang ? "selected" : null }, name)));
+    const status = el("p", { class: "hint" });
+    const actions = el("div", { class: "dialog-actions start" });
+    const show = (run) => {
+      const counts = run ? { done: run.done, total: run.total } : null;
+      status.textContent = !run ? ""
+        : run.status === "running" ? t("Идёт: {done} из {total}", counts)
+          : run.status === "stopped" ? t("Остановлено: {done} из {total}", counts)
+            : t("Готово: {done} из {total}", counts);
+      const running = run && run.status === "running";
+      actions.replaceChildren(...[
+        el("button", { type: "button", class: "primary", disabled: running, onclick: start }, t("Распознать все фотографии заново")),
+        running ? el("button", { type: "button", class: "ghost", onclick: stop }, t("Остановить")) : null,
+        running ? el("button", { type: "button", class: "ghost", onclick: refresh }, t("Обновить")) : null,
+      ].filter(Boolean));
+    };
+    const run = async (work) => {
+      try {
+        show((await work()).rerun);
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+    async function start() {
+      if (!window.confirm(t("Распознать заново все фотографии? Каждая уйдёт в Grok с вашим ключом, моделью и промптом, прежние описания заменятся."))) return;
+      await run(async () => {
+        await store({});
+        return api("/recognition/rerun", { method: "POST", body: { lang: lang.value } });
+      });
+    }
+    const stop = () => run(() => api("/recognition/rerun", { method: "DELETE" }));
+    const refresh = () => run(() => api("/settings"));
+    show(initial);
+    return el("div", { class: "rerun" }, [
+      el("h3", {}, t("Распознать заново")),
+      el("p", { class: "hint" }, t("Все фотографии получат новые описания: с моделью и промптом выше и на выбранном языке. Прежние описания останутся в истории.")),
+      el("label", {}, [t("Язык описания"), lang]),
+      actions,
+      status,
+    ]);
   }
 
   // The language is fixed for the life of the page: switching reloads it.
@@ -2225,7 +2419,9 @@
   window.addEventListener("popstate", () => {
     const number = numberFromLocation();
     if (number) openBox(number, "none");
+    else if (!confirmDiscard()) setRoute(state.selected, "push");
     else {
+      state.editing = false;
       state.selected = null;
       state.detail = null;
       state.history = [];
@@ -2294,6 +2490,17 @@
     return [...form.querySelectorAll("input, textarea")].some((field) => (field.type === "file" ? field.files.length : field.value.trim()));
   }
 
+  // Leaving a card being edited, by any way, asks first if anything changed.
+  // true: go on.
+  function confirmDiscard() {
+    return !state.editing || !editChanged() || window.confirm(t("Отменить несохранённые изменения?"));
+  }
+
+  window.addEventListener("beforeunload", (event) => {
+    const composer = document.querySelector("form.composer");
+    if ((state.editing && editChanged()) || (composer && formHasText(composer))) event.preventDefault();
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
       const form = event.target.closest?.("form.stack, form.composer")
@@ -2324,7 +2531,7 @@
         return;
       }
       if (state.editing) {
-        if (!editChanged() || window.confirm(t("Отменить несохранённые изменения?"))) {
+        if (confirmDiscard()) {
           state.editing = false;
           renderDetail();
         }

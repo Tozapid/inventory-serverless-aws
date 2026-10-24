@@ -85,3 +85,9 @@ variable "releases_repository" {
   default     = "Tozapid/inventory-serverless-aws"
   description = "GitHub repository (owner/name) whose releases the settings compare the version of the site with. Empty turns the check off."
 }
+
+variable "media_key_from" {
+  type        = string
+  default     = null
+  description = "Name of a deployed stack of this project whose CloudFront key signs the photo cookies, instead of a key of its own; \"\" for its own. Unset: a preview (<name>-pr<N>) uses <name>'s, any other stack its own. The account allows ten CloudFront public keys."
+}

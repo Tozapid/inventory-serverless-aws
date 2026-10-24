@@ -27,7 +27,11 @@ resource "aws_lambda_function" "api" {
   architectures = ["arm64"]
   handler       = "lambda_app.handler"
   memory_size   = 256
-  timeout       = 90
+  # API Gateway answers a request after 30 s anyway. The long limit is for the
+  # background recognition of every photo again: one call goes through about
+  # a box every few seconds and hands the rest to the next call a minute before
+  # its time is up, so a long run takes few calls.
+  timeout = 900
 
   filename         = data.archive_file.api.output_path
   source_code_hash = data.archive_file.api.output_base64sha256
@@ -40,8 +44,8 @@ resource "aws_lambda_function" "api" {
       MEDIA_BUCKET             = aws_s3_bucket.media.id
       URL_TTL_SECONDS          = tostring(var.url_ttl_seconds)
       PHOTO_MAX_BYTES          = tostring(var.photo_max_bytes)
-      CLOUDFRONT_KEY_PAIR_ID   = aws_cloudfront_public_key.media.id
-      MEDIA_KEY_PARAMETER_NAME = aws_ssm_parameter.media_signing_key.name
+      CLOUDFRONT_KEY_PAIR_ID   = local.media_key.public_key_id
+      MEDIA_KEY_PARAMETER_NAME = local.media_key.private_key_parameter
       USER_POOL_ID             = aws_cognito_user_pool.main.id
       ADMIN_GROUP              = aws_cognito_user_group.admins.name
       INVITE_EMAILS            = var.invite_emails ? "true" : "false"

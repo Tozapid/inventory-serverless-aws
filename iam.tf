@@ -19,7 +19,7 @@ data "aws_iam_policy_document" "lambda" {
   statement {
     sid       = "ReadMediaSigningKey"
     actions   = ["ssm:GetParameter"]
-    resources = [aws_ssm_parameter.media_signing_key.arn]
+    resources = ["arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.media_key.private_key_parameter}"]
   }
 
   statement {

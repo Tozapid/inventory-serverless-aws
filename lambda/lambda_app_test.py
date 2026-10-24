@@ -339,7 +339,7 @@ class RecognitionSwitchTest(unittest.TestCase):
     def test_settings_do_not_hand_out_keys_when_off(self):
         status, body = call("GET", "/api/settings")
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"recognition": False, "grok_key_set": False, "grok_key_hint": "", "grok_model": ""})
+        self.assertEqual(body, {"recognition": False, "grok_key_set": False, "grok_key_hint": "", "grok_model": "", "grok_prompt": ""})
 
     def test_a_key_cannot_be_saved_when_off(self):
         self.assertEqual(call("PUT", "/api/settings", {"grok_api_key": "xai-secret", "grok_model": "grok-4.7"})[0], 403)
@@ -462,10 +462,10 @@ class HistoryDeleteTest(unittest.TestCase):
             lambda_app.history_item("7", "", "Ошибка", "2026-09-02T10:00:00.000Z", "a@example.com", ""),
         ])
 
-        def delete_item(Key, ConditionExpression=None):
+        def delete_item(Key, ConditionExpression=None, ReturnValues=None):
             if (Key["pk"], Key["sk"]) not in table.rows:
                 raise ClientError("ConditionalCheckFailedException")
-            del table.rows[(Key["pk"], Key["sk"])]
+            return {"Attributes": table.rows.pop((Key["pk"], Key["sk"]))}
 
         table.delete_item = delete_item
         self.table = table
@@ -526,17 +526,20 @@ class TurnedPhotoTest(unittest.TestCase):
         update = self.written[0]["Update"]["ExpressionAttributeValues"]
         return body, update[":h"]["S"], [action for action in self.written if "Put" in action]
 
+    def fields(self, history):
+        return [action["Put"]["Item"].get("field", {}).get("S") for action in history]
+
     def test_a_turned_photo_keeps_its_description(self):
         body, hidden, history = self.complete(keep_description=True)
         self.assertEqual((body["hidden_text"], hidden), ("Синие провода", "Синие провода"))
         self.assertFalse(body["recognition_pending"])
-        self.assertEqual((self.queued, history), ([], []))
+        self.assertEqual((self.queued, self.fields(history)), ([], ["photo"]))
 
     def test_a_new_photo_is_recognized_again(self):
         body, hidden, history = self.complete()
         self.assertEqual((body["hidden_text"], hidden), ("", ""))
         self.assertTrue(body["recognition_pending"])
-        self.assertEqual(len(history), 1)
+        self.assertEqual(self.fields(history), ["photo", "hidden_text"])
 
 
 class SettingsTable:
@@ -569,7 +572,8 @@ class GrokKeyTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotIn(self.KEY, json.dumps(body))
         status, body = call("GET", "/api/settings")
-        self.assertEqual(body, {"recognition": True, "grok_key_set": True, "grok_key_hint": "WXYZ", "grok_model": "grok-4.7"})
+        self.assertEqual(body, {"recognition": True, "grok_key_set": True, "grok_key_hint": "WXYZ", "grok_model": "grok-4.7",
+                                "grok_prompt": "", "default_prompt": lambda_app.RECOGNITION_PROMPTS["ru"], "rerun": None})
         self.assertNotIn(self.KEY, json.dumps(body))
 
     def test_an_empty_key_keeps_the_saved_one(self):
@@ -583,6 +587,17 @@ class GrokKeyTest(unittest.TestCase):
         status, body = call("PUT", "/api/settings", {"remove_key": True, "grok_model": "grok-4.7"})
         self.assertEqual(self.saved_key(), "")
         self.assertFalse(body["grok_key_set"])
+
+    def test_an_own_prompt_is_kept_until_changed(self):
+        call("PUT", "/api/settings", {"grok_api_key": self.KEY, "grok_model": "grok-4.7", "grok_prompt": "Только инструменты"})
+        call("PUT", "/api/settings", {"grok_api_key": "", "grok_model": "grok-5"})
+        self.assertEqual(call("GET", "/api/settings")[1]["grok_prompt"], "Только инструменты")
+        call("PUT", "/api/settings", {"grok_model": "grok-5", "grok_prompt": ""})
+        self.assertEqual(call("GET", "/api/settings")[1]["grok_prompt"], "", "empty is the built-in prompt")
+
+    def test_the_prompt_gets_the_language(self):
+        self.assertEqual(lambda_app.recognition_prompt({}, "en"), lambda_app.RECOGNITION_PROMPTS["en"])
+        self.assertEqual(lambda_app.recognition_prompt({"grok_prompt": "Only tools. "}, "it"), "Only tools.\n\nScrivi in italiano.")
 
     def test_a_short_key_gets_no_hint(self):
         call("PUT", "/api/settings", {"grok_api_key": "short", "grok_model": "grok-4.7"})
@@ -616,12 +631,33 @@ class ScanTable:
             rows = [row for row in self.rows.values() if row.get(name.name) == value]
             rows = sorted(rows, key=lambda row: row.get("gsi1sk") or "", reverse=not ScanIndexForward)
         else:
-            pk_part, sk_part = KeyConditionExpression.get_expression()["values"]
-            pk = pk_part.get_expression()["values"][1]
-            prefix = sk_part.get_expression()["values"][1]
+            values = KeyConditionExpression.get_expression()["values"]
+            if hasattr(values[0], "get_expression"):
+                pk = values[0].get_expression()["values"][1]
+                prefix = values[1].get_expression()["values"][1]
+            else:
+                pk, prefix = values[1], ""
             rows = [row for (key, sk), row in self.rows.items() if key == pk and sk.startswith(prefix)]
             rows = sorted(rows, key=lambda row: row["sk"], reverse=not ScanIndexForward)
         return {"Items": rows[:Limit] if Limit else rows}
+
+    def delete_item(self, Key, **kwargs):
+        return {"Attributes": self.rows.pop((Key["pk"], Key["sk"]), None)}
+
+    def batch_writer(self):
+        table = self
+
+        class Batch:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def delete_item(self, Key):
+                table.rows.pop((Key["pk"], Key["sk"]), None)
+
+        return Batch()
 
 
 def meta(number, contents, hidden=""):
@@ -924,3 +960,194 @@ class VersionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeBucket:
+    def __init__(self, keys):
+        self.keys = set(keys)
+
+    def get_paginator(self, name):
+        bucket = self
+
+        class Paginator:
+            def paginate(self, Bucket, Prefix):
+                return [{"Contents": [{"Key": key} for key in sorted(bucket.keys) if key.startswith(Prefix)]}]
+
+        return Paginator()
+
+    def delete_object(self, Bucket, Key):
+        self.keys.discard(Key)
+
+
+class PhotoHistoryTest(unittest.TestCase):
+    OLD = ("boxes/5/original/" + "a" * 32 + ".jpg", "boxes/5/thumb/" + "a" * 32 + ".jpg")
+    NEW = ("boxes/5/original/" + "b" * 32 + ".jpg", "boxes/5/thumb/" + "b" * 32 + ".jpg")
+    LOST = "boxes/5/original/" + "c" * 32 + ".jpg"
+
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", MEDIA_BUCKET="media", ADMIN_GROUP="admins")
+        self.table = lambda_app._table = ScanTable([dict(meta("5", "Кабели"), photo_key=self.OLD[0], thumb_key=self.OLD[1])])
+        self.bucket = lambda_app._s3 = FakeBucket(self.OLD + self.NEW + (self.LOST,))
+        self.saved = (lambda_app.transact, lambda_app.head_image, lambda_app.recognition_configured)
+        lambda_app.transact = self.apply
+        lambda_app.head_image = lambda key, limit: {"ContentType": "image/jpeg"}
+        lambda_app.recognition_configured = lambda who: False
+
+    def tearDown(self):
+        lambda_app.transact, lambda_app.head_image, lambda_app.recognition_configured = self.saved
+        lambda_app._table = None
+        lambda_app._s3 = None
+
+    def apply(self, actions):
+        from boto3.dynamodb.types import TypeDeserializer
+
+        load = TypeDeserializer().deserialize
+        for action in actions:
+            if "Put" in action:
+                self.table.put_item({key: load(value) for key, value in action["Put"]["Item"].items()})
+            elif "Update" in action:
+                row = self.table.rows[("BOX#5", "META")]
+                row.update(photo_key=load(action["Update"]["ExpressionAttributeValues"][":p"]),
+                           thumb_key=load(action["Update"]["ExpressionAttributeValues"][":t"]))
+
+    def test_the_old_photo_stays_and_the_history_shows_both(self):
+        status, _ = call("POST", "/api/boxes/5/photo/complete", {"original_key": self.NEW[0], "thumb_key": self.NEW[1]})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.bucket.keys, set(self.OLD + self.NEW), "an unfinished upload goes, the old photo stays")
+        [entry] = call("GET", "/api/boxes/5/history")[1]["items"]
+        self.assertEqual(entry["field"], "photo")
+        self.assertEqual((entry["before_photo_url"], entry["after_thumb_url"]), ("/media/" + self.OLD[0], "/media/" + self.NEW[1]))
+
+    def test_deleting_the_entry_deletes_a_photo_nothing_shows(self):
+        call("POST", "/api/boxes/5/photo/complete", {"original_key": self.NEW[0], "thumb_key": self.NEW[1]})
+        [entry] = call("GET", "/api/boxes/5/history")[1]["items"]
+        self.assertEqual(call("DELETE", "/api/boxes/5/history/" + entry["id"], groups="[admins]")[0], 200)
+        self.assertEqual(self.bucket.keys, set(self.NEW))
+
+
+class TrashTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", MEDIA_BUCKET="media", ADMIN_GROUP="admins")
+        photo = "boxes/7/original/" + "a" * 32 + ".jpg"
+        self.table = lambda_app._table = ScanTable([
+            dict(meta("7", "Лампы"), photo_key=photo, description="Свет"),
+            lambda_app.history_item("7", "", "Лампы", "2026-09-01T10:00:00.000Z", "a@example.com", ""),
+        ])
+        self.bucket = lambda_app._s3 = FakeBucket([photo])
+        self.saved = lambda_app.transact
+        lambda_app.transact = self.apply
+
+    def tearDown(self):
+        lambda_app.transact = self.saved
+        lambda_app._table = None
+        lambda_app._s3 = None
+
+    def apply(self, actions):
+        from boto3.dynamodb.types import TypeDeserializer
+
+        load = TypeDeserializer().deserialize
+        for action in actions:
+            if "Put" in action:
+                item = {key: load(value) for key, value in action["Put"]["Item"].items()}
+                if (item["pk"], item["sk"]) in self.table.rows and "attribute_not_exists" in action["Put"].get("ConditionExpression", ""):
+                    raise ClientError("ConditionalCheckFailedException")
+                self.table.put_item(item)
+            elif "Delete" in action:
+                key = action["Delete"]["Key"]
+                self.table.rows.pop((load(key["pk"]), load(key["sk"])))
+
+    def numbers(self):
+        return [item["number"] for item in call("GET", "/api/boxes")[1]["items"]]
+
+    def test_a_deleted_box_waits_in_the_trash(self):
+        self.assertEqual(call("DELETE", "/api/boxes/7")[0], 200)
+        self.assertEqual(self.numbers(), [])
+        self.assertEqual(call("GET", "/api/boxes/7")[0], 404)
+        [item] = call("GET", "/api/trash")[1]["items"]
+        self.assertEqual((item["number"], item["description"], item["deleted_by"]), ("7", "Свет", "person@example.com"))
+        self.assertTrue(self.bucket.keys, "the photo stays")
+        self.assertTrue(any(sk.startswith("HIST#") for pk, sk in self.table.rows), "the history stays")
+
+    def test_the_number_stays_taken_while_in_the_trash(self):
+        call("DELETE", "/api/boxes/7")
+        status, body = call("POST", "/api/boxes", {"number": "7"})
+        self.assertEqual(status, 409)
+        self.assertIn("корзине", body["error"])
+
+    def test_a_box_is_restored_with_its_history(self):
+        call("DELETE", "/api/boxes/7")
+        status, body = call("POST", "/api/trash/7/restore")
+        self.assertEqual((status, body["description"]), (200, "Свет"))
+        self.assertEqual(self.numbers(), ["7"])
+        self.assertEqual(call("GET", "/api/trash")[1]["items"], [])
+        self.assertEqual(len(call("GET", "/api/boxes/7/history")[1]["items"]), 1)
+        self.assertNotIn("deleted_at", self.table.rows[("BOX#7", "META")])
+
+    def test_only_an_admin_purges(self):
+        call("DELETE", "/api/boxes/7")
+        self.assertEqual(call("DELETE", "/api/trash/7")[0], 403)
+        self.assertEqual(call("DELETE", "/api/trash/7", groups="[admins]")[0], 200)
+        self.assertEqual((self.table.rows, self.bucket.keys), ({}, set()))
+        self.assertEqual(call("POST", "/api/trash/7/restore")[0], 404)
+
+
+class RerunTest(unittest.TestCase):
+    THUMB = "boxes/{}/thumb/" + "b" * 32 + ".jpg"
+
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", RECOGNITION="true")
+        self.table = lambda_app._table = ScanTable([
+            dict(meta("1", "Кабели"), thumb_key=self.THUMB.format(1)),
+            meta("2", "Без фото"),
+            dict(meta("3", "Лампы"), thumb_key=self.THUMB.format(3)),
+            {"pk": "USER#person@example.com", "sk": "SETTINGS", "grok_api_key": "xai-key", "grok_model": "grok-4.7"},
+        ])
+        self.queued = []
+        self.recognized = []
+        self.saved = (lambda_app.queue_rerun, lambda_app.finish_recognition)
+        lambda_app.queue_rerun = lambda *args: self.queued.append(args)
+        lambda_app.finish_recognition = lambda number, user, thumb, lang, note="": self.recognized.append((number, lang, note))
+
+    def tearDown(self):
+        lambda_app.queue_rerun, lambda_app.finish_recognition = self.saved
+        lambda_app._table = None
+
+    def run_row(self):
+        return self.table.rows[("USER#person@example.com", "RERUN")]
+
+    def test_every_photo_is_recognized_again(self):
+        status, body = call("POST", "/api/recognition/rerun", {"lang": "en"})
+        self.assertEqual((status, body["rerun"]["total"], body["rerun"]["status"]), (200, 2, "running"))
+        [(user, run, numbers, lang)] = self.queued
+        self.assertEqual((user, numbers, lang), ("person@example.com", ["1", "3"], "en"))
+        lambda_app.recognize_all(user, run, numbers, lang)
+        self.assertEqual(self.recognized, [("1", "en", "Повторное распознавание"), ("3", "en", "Повторное распознавание")])
+        self.assertEqual((self.run_row()["status"], self.run_row()["done"]), ("done", 2))
+        self.assertEqual(call("GET", "/api/settings")[1]["rerun"]["done"], 2)
+
+    def test_a_stopped_run_ends(self):
+        call("POST", "/api/recognition/rerun", {"lang": "ru"})
+        [(user, run, numbers, lang)] = self.queued
+        self.assertEqual(call("DELETE", "/api/recognition/rerun")[1]["rerun"]["status"], "stopped")
+        lambda_app.recognize_all(user, run, numbers, lang)
+        self.assertEqual(self.recognized, [])
+
+    def test_the_rest_goes_to_a_new_call_when_time_runs_out(self):
+        call("POST", "/api/recognition/rerun", {"lang": "ru"})
+        [(user, run, numbers, lang)] = self.queued
+
+        class Clock:
+            left = [120_000, 30_000]
+
+            def get_remaining_time_in_millis(self):
+                return self.left.pop(0)
+
+        lambda_app.recognize_all(user, run, numbers, lang, Clock())
+        self.assertEqual(self.recognized, [("1", "ru", "Повторное распознавание")])
+        self.assertEqual(self.queued[-1], (user, run, ["3"], "ru"))
+        self.assertEqual(self.run_row()["status"], "running")
+
+    def test_without_a_key_nothing_starts(self):
+        del self.table.rows[("USER#person@example.com", "SETTINGS")]
+        self.assertEqual(call("POST", "/api/recognition/rerun", {"lang": "ru"})[0], 400)
+        self.assertEqual(self.queued, [])

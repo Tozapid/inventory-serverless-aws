@@ -61,6 +61,12 @@ def handler(event, context):
         except Exception:
             logger.exception("background recognition failed")
         return {"ok": True}
+    if isinstance(event, dict) and event.get("task") == "recognize_all":
+        try:
+            recognize_all(event.get("user") or "", event.get("run") or "", event.get("numbers") or [], event.get("lang") or "ru", context)
+        except Exception:
+            logger.exception("recognition of all photos failed")
+        return {"ok": True}
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath") or "/"
     lang = request_language(event)
@@ -101,6 +107,16 @@ def route(method, parts, event):
         return put_settings(event)
     if parts == ["settings", "recognition-log"] and method == "GET":
         return get_recognition_log(event)
+    if parts == ["recognition", "rerun"] and method == "POST":
+        return start_rerun(event)
+    if parts == ["recognition", "rerun"] and method == "DELETE":
+        return stop_rerun(event)
+    if parts == ["trash"] and method == "GET":
+        return list_trash()
+    if len(parts) == 3 and parts[0] == "trash" and parts[2] == "restore" and method == "POST":
+        return restore_box(parts[1], event)
+    if len(parts) == 2 and parts[0] == "trash" and method == "DELETE":
+        return purge_box(parts[1], event)
     if parts == ["boxes"] and method == "GET":
         return list_boxes(event)
     if parts == ["boxes"] and method == "POST":
@@ -110,7 +126,7 @@ def route(method, parts, event):
     if len(parts) == 2 and parts[0] == "boxes" and method == "PATCH":
         return update_box(parts[1], event)
     if len(parts) == 2 and parts[0] == "boxes" and method == "DELETE":
-        return delete_box(parts[1])
+        return delete_box(parts[1], event)
     if len(parts) == 3 and parts[0] == "boxes" and parts[2] == "history" and method == "GET":
         return get_history(parts[1])
     if len(parts) == 4 and parts[0] == "boxes" and parts[2] == "history" and method == "DELETE":
@@ -310,6 +326,10 @@ def create_box(event):
     number = validate_number(payload.get("number"))
     description = clean_text(payload.get("description"), 4000, "Описание")
     contents = clean_text(payload.get("contents"), 20000, "Содержимое")
+    # The history and photos of a box in the trash stay under its number, so
+    # the number is free again only once that box is restored or purged.
+    if get_trashed(number):
+        raise ApiError(409, "Коробка с таким номером лежит в корзине. Восстановите её или удалите навсегда в настройках.")
     now = now_iso()
     who = actor(event)
     item = {
@@ -394,11 +414,99 @@ def update_box(number, event):
     return response(200, public_detail(updated))
 
 
-def delete_box(number):
+# A deleted box goes to the trash: its card moves from SK=META to SK=TRASH,
+# out of the list, search and the box index, while its history and photos
+# stay. The trash is listed from the "boxes" index under gsi1pk=TRASH, newest
+# first; from there a box is restored or purged for good.
+def delete_box(number, event):
+    current = require_meta(number)
+    now = now_iso()
+    trashed = dict(current, sk="TRASH", gsi1pk="TRASH", gsi1sk=now, deleted_at=now, deleted_by=actor(event))
+    transact([
+        {"Put": {
+            "TableName": table_name(),
+            "Item": marshal_item(trashed),
+            "ConditionExpression": "attribute_not_exists(pk)",
+        }},
+        {"Delete": {
+            "TableName": table_name(),
+            "Key": {"pk": marshal(box_pk(number)), "sk": marshal("META")},
+            "ConditionExpression": "version = :v",
+            "ExpressionAttributeValues": {":v": marshal(as_int(current.get("version"), 1))},
+        }},
+    ])
+    return response(200, {"deleted": True, "trash": True})
+
+
+def get_trashed(number):
+    return table().get_item(Key={"pk": box_pk(number), "sk": "TRASH"}).get("Item")
+
+
+def list_trash():
+    from boto3.dynamodb.conditions import Key
+
+    items = []
+    start = None
+    while True:
+        kwargs = {"IndexName": "boxes", "KeyConditionExpression": Key("gsi1pk").eq("TRASH"), "ScanIndexForward": False}
+        if start:
+            kwargs["ExclusiveStartKey"] = start
+        resp = table().query(**kwargs)
+        items.extend(resp.get("Items", []))
+        start = resp.get("LastEvaluatedKey")
+        if not start:
+            break
+    return response(200, {
+        "items": [dict(public_card(item), deleted_at=item.get("deleted_at") or "", deleted_by=item.get("deleted_by") or "") for item in items],
+        "urls_expire_at": urls_expire_at(),
+    })
+
+
+def restore_box(number, event):
+    number = validate_number(number)
+    trashed = get_trashed(number)
+    if not trashed:
+        raise ApiError(404, "В корзине нет такой коробки")
+    restored = {key: value for key, value in trashed.items() if key not in {"deleted_at", "deleted_by"}}
+    restored.update({
+        "sk": "META",
+        "gsi1pk": "BOX",
+        "gsi1sk": sort_key(number),
+        "updated_at": now_iso(),
+        "updated_by": actor(event),
+        "version": as_int(trashed.get("version"), 1) + 1,
+    })
+    try:
+        transact([
+            {"Put": {
+                "TableName": table_name(),
+                "Item": marshal_item(restored),
+                "ConditionExpression": "attribute_not_exists(pk)",
+            }},
+            {"Delete": {
+                "TableName": table_name(),
+                "Key": {"pk": marshal(box_pk(number)), "sk": marshal("TRASH")},
+                "ConditionExpression": "attribute_exists(pk)",
+            }},
+        ])
+    except Exception as exc:
+        if conditional_failed(exc):
+            raise ApiError(409, "Коробка с таким номером уже есть") from exc
+        raise
+    return response(200, public_detail(restored))
+
+
+# Purging removes the box with its history and photos; only administrators
+# do it, as with history entries.
+def purge_box(number, event):
+    if not is_admin(event):
+        raise ApiError(403, "Нужны права администратора")
     number = validate_number(number)
     items = query_all(number)
-    if not any(item.get("sk") == "META" for item in items):
-        raise ApiError(404, "Коробка не найдена")
+    if not any(item.get("sk") == "TRASH" for item in items):
+        raise ApiError(404, "В корзине нет такой коробки")
+    if any(item.get("sk") == "META" for item in items):
+        raise ApiError(409, "Коробка с таким номером уже есть")
     with table().batch_writer() as batch:
         for item in items:
             batch.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
@@ -416,15 +524,22 @@ def get_history(number):
         ScanIndexForward=False,
         Limit=100,
     )
-    items = [{
-        "id": item["sk"].removeprefix("HIST#"),
-        "at": item.get("changed_at"),
-        "by": item.get("changed_by") or "",
-        "field": item.get("field") or "contents",
-        "before": item.get("contents_before") or "",
-        "after": item.get("contents_after") or "",
-        "note": item.get("note") or "",
-    } for item in resp.get("Items", [])]
+    items = []
+    for item in resp.get("Items", []):
+        entry = {
+            "id": item["sk"].removeprefix("HIST#"),
+            "at": item.get("changed_at"),
+            "by": item.get("changed_by") or "",
+            "field": item.get("field") or "contents",
+            "before": item.get("contents_before") or "",
+            "after": item.get("contents_after") or "",
+            "note": item.get("note") or "",
+        }
+        if entry["field"] == "photo":
+            for side in ("before", "after"):
+                entry[side + "_photo_url"] = signed_get(item.get(f"photo_{side}") or "")
+                entry[side + "_thumb_url"] = signed_get(item.get(f"thumb_{side}") or item.get(f"photo_{side}") or "")
+        items.append(entry)
     return response(200, {"items": items})
 
 
@@ -440,14 +555,18 @@ def delete_history_entry(number, entry_id, event):
     if not HISTORY_ID_RE.fullmatch(entry_id or ""):
         raise ApiError(400, "Некорректная запись истории")
     try:
-        table().delete_item(
+        old = table().delete_item(
             Key={"pk": box_pk(number), "sk": "HIST#" + entry_id},
             ConditionExpression="attribute_exists(pk)",
+            ReturnValues="ALL_OLD",
         )
     except Exception as exc:
         if conditional_failed(exc):
             raise ApiError(404, "Такой записи в истории нет") from exc
         raise
+    # An earlier photo that no other entry and not the card refers to goes too.
+    if ((old or {}).get("Attributes") or {}).get("field") == "photo":
+        cleanup_prefix(number, kept_photo_keys(number))
     return response(200, {"deleted": entry_id})
 
 
@@ -508,7 +627,16 @@ def complete_photo(number, event):
             "ExpressionAttributeValues": {key: marshal(value) for key, value in values.items()},
         }
     }]
-    # The description of the old photo goes with it; the history keeps it.
+    # The old photo stays in the bucket, and the history shows it next to the
+    # new one; so does the description of the old photo, which goes with it.
+    photo = history_item(number, "", "", now, who, "Поворот" if keep else "", field="photo")
+    photo.update({
+        "photo_before": current.get("photo_key") or "",
+        "thumb_before": current.get("thumb_key") or "",
+        "photo_after": original_key,
+        "thumb_after": thumb_key,
+    })
+    actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(photo)}})
     old_hidden = current.get("hidden_text") or ""
     if old_hidden and not keep:
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
@@ -520,7 +648,8 @@ def complete_photo(number, event):
         if conditional_failed(exc):
             raise ApiError(409, "Коробку уже изменили. Повторите загрузку фотографии.") from exc
         raise
-    cleanup_prefix(number, {original_key, thumb_key})
+    # Uploads that were never completed go; photos the history shows stay.
+    cleanup_prefix(number, {original_key, thumb_key} | kept_photo_keys(number))
     if pending:
         try:
             queue_recognition(number, who, thumb_key, request_language(event))
@@ -572,7 +701,7 @@ def queue_recognition(number, user_email, thumb_key, lang="ru"):
     )
 
 
-def finish_recognition(number, user_email, thumb_key, lang="ru"):
+def finish_recognition(number, user_email, thumb_key, lang="ru", note=""):
     if not recognition_enabled():
         return
     number = validate_number(number)
@@ -613,7 +742,7 @@ def finish_recognition(number, user_email, thumb_key, lang="ru"):
     # their key paid for it.
     if hidden != before:
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
-            number, before, hidden, now_iso(), user_email, "", field="hidden_text"
+            number, before, hidden, now_iso(), user_email, note, field="hidden_text"
         ))}})
     try:
         transact(actions)
@@ -624,6 +753,97 @@ def finish_recognition(number, user_email, thumb_key, lang="ru"):
         log.finish("error", "Внутренняя ошибка", exception_text(exc))
         raise
     log.finish("ok", chars=len(hidden))
+
+
+# Recognition of every photo again, with the user's current model, prompt and
+# the language chosen for it. The function calls itself in the background and
+# goes through the boxes one by one, so Grok gets one photo at a time; when
+# less than a minute of its time is left, it hands the rest of the list to a
+# new call. The run is kept per user under SK=RERUN: a new run replaces it,
+# and a stopped one ends before the next box.
+RERUN_MARGIN_MS = 60_000
+
+
+def start_rerun(event):
+    who = actor(event)
+    if not recognition_enabled():
+        raise ApiError(403, "Распознавание фотографий выключено")
+    if not recognition_configured(who):
+        raise ApiError(400, "Сначала сохраните ключ и модель Grok")
+    payload = body_json(event)
+    lang = payload.get("lang") if payload.get("lang") in LANGUAGES else request_language(event)
+    numbers = []
+    start = None
+    while True:
+        page, start = query_boxes(start, 1000)
+        numbers += [item["number"] for item in page if item.get("thumb_key")]
+        if not start:
+            break
+    run = {
+        "pk": f"USER#{who}",
+        "sk": "RERUN",
+        "run": uuid.uuid4().hex,
+        "status": "running" if numbers else "done",
+        "lang": lang,
+        "total": len(numbers),
+        "done": 0,
+        "started_at": now_iso(),
+    }
+    table().put_item(Item=run)
+    if numbers:
+        queue_rerun(who, run["run"], numbers, lang)
+    return response(200, {"rerun": rerun_status(run)})
+
+
+def stop_rerun(event):
+    key = {"pk": user_pk(event), "sk": "RERUN"}
+    run = table().get_item(Key=key).get("Item")
+    if run and run.get("status") == "running":
+        run.update(status="stopped", finished_at=now_iso())
+        table().put_item(Item=run)
+    return response(200, {"rerun": rerun_status(run)})
+
+
+def rerun_status(run):
+    if not run:
+        return None
+    return {key: run.get(key) for key in ("status", "lang", "started_at", "finished_at")} | {
+        "total": as_int(run.get("total")),
+        "done": as_int(run.get("done")),
+    }
+
+
+def queue_rerun(user_email, run_id, numbers, lang):
+    import boto3
+
+    boto3.client("lambda").invoke(
+        FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+        InvocationType="Event",
+        Payload=json.dumps({"task": "recognize_all", "user": user_email, "run": run_id, "numbers": numbers, "lang": lang}).encode("utf-8"),
+    )
+
+
+def recognize_all(user_email, run_id, numbers, lang, context=None):
+    key = {"pk": f"USER#{user_email}", "sk": "RERUN"}
+    for index, number in enumerate(numbers):
+        run = table().get_item(Key=key).get("Item") or {}
+        if run.get("run") != run_id or run.get("status") != "running":
+            return
+        if context and context.get_remaining_time_in_millis() < RERUN_MARGIN_MS:
+            queue_rerun(user_email, run_id, numbers[index:], lang)
+            return
+        meta = get_meta(number)
+        if meta and meta.get("thumb_key"):
+            try:
+                finish_recognition(number, user_email, meta["thumb_key"], lang, note="Повторное распознавание")
+            except Exception:
+                logger.exception("recognition of %s failed", number)
+        run["done"] = as_int(run.get("done")) + 1
+        table().put_item(Item=run)
+    run = table().get_item(Key=key).get("Item") or {}
+    if run.get("run") == run_id and run.get("status") == "running":
+        run.update(status="done", finished_at=now_iso())
+        table().put_item(Item=run)
 
 
 # Recognition runs in the background, so its outcome is kept per user under
@@ -765,6 +985,15 @@ def history_item(number, before, after, now, who, note, field="contents"):
     if field != "contents":
         item["field"] = field
     return item
+
+
+# The photo of the card, in the trash too, and every photo its history shows.
+def kept_photo_keys(number):
+    keys = set()
+    for item in query_all(number):
+        names = ("photo_key", "thumb_key") if item.get("sk") in {"META", "TRASH"} else ("photo_before", "thumb_before", "photo_after", "thumb_after")
+        keys.update(item.get(name) for name in names if item.get(name))
+    return keys
 
 
 def presign_post(key, content_type, max_bytes):
@@ -1032,6 +1261,22 @@ RECOGNITION_PROMPTS = {
 }
 
 
+# A prompt of the user's own says what to write; the language is added to it.
+ANSWER_LANGUAGE = {
+    "ru": "Пиши по-русски.",
+    "en": "Write in English.",
+    "fr": "Écris en français.",
+    "it": "Scrivi in italiano.",
+}
+
+
+def recognition_prompt(settings, lang):
+    own = (settings.get("grok_prompt") or "").strip()
+    if not own:
+        return RECOGNITION_PROMPTS.get(lang, RECOGNITION_PROMPTS["ru"])
+    return own + "\n\n" + ANSWER_LANGUAGE.get(lang, ANSWER_LANGUAGE["ru"])
+
+
 class RecognitionSkipped(Exception):
     pass
 
@@ -1043,7 +1288,13 @@ def get_settings(event):
         actor(event)
         return response(200, dict(key_status({}), recognition=False, grok_model=""))
     item = table().get_item(Key={"pk": user_pk(event), "sk": "SETTINGS"}).get("Item") or {}
-    return response(200, dict(key_status(item), recognition=True))
+    run = table().get_item(Key={"pk": user_pk(event), "sk": "RERUN"}).get("Item")
+    return response(200, dict(
+        key_status(item),
+        recognition=True,
+        default_prompt=RECOGNITION_PROMPTS[request_language(event)],
+        rerun=rerun_status(run),
+    ))
 
 
 # An empty key keeps the saved one; remove_key deletes it.
@@ -1056,11 +1307,14 @@ def put_settings(event):
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
         raise ApiError(400, "Некорректное название модели")
     key = {"pk": user_pk(event), "sk": "SETTINGS"}
+    saved = table().get_item(Key=key).get("Item") or {}
+    # An empty prompt is the built-in one; a missing field keeps the saved one.
+    prompt = clean_text(payload.get("grok_prompt"), 4000, "Промпт") if "grok_prompt" in payload else saved.get("grok_prompt") or ""
     if payload.get("remove_key"):
         api_key = ""
     elif not api_key:
-        api_key = (table().get_item(Key=key).get("Item") or {}).get("grok_api_key") or ""
-    item = dict(key, grok_api_key=api_key, grok_model=model, updated_at=now_iso())
+        api_key = saved.get("grok_api_key") or ""
+    item = dict(key, grok_api_key=api_key, grok_model=model, grok_prompt=prompt, updated_at=now_iso())
     table().put_item(Item=item)
     return response(200, dict(key_status(item), saved=True))
 
@@ -1071,6 +1325,7 @@ def key_status(item):
         "grok_key_set": bool(api_key),
         "grok_key_hint": api_key[-4:] if len(api_key) >= 12 else "",
         "grok_model": item.get("grok_model") or "grok-4.7",
+        "grok_prompt": item.get("grok_prompt") or "",
     }
 
 
@@ -1274,7 +1529,7 @@ def describe_photo(user_email, thumb_key, lang="ru", log=None):
                 },
                 {
                     "type": "input_text",
-                    "text": RECOGNITION_PROMPTS.get(lang, RECOGNITION_PROMPTS["ru"]),
+                    "text": recognition_prompt(settings, lang),
                 },
             ],
         }],
@@ -1621,6 +1876,14 @@ MESSAGES = {
     "Некорректная запись истории": ("Invalid history entry", "Entrée d’historique invalide", "Voce della cronologia non valida"),
     "Такой записи в истории нет": ("There is no such history entry", "Cette entrée d’historique n’existe pas", "Questa voce della cronologia non esiste"),
     "Нужен адрес почты": ("An email address is needed", "Une adresse e-mail est requise", "Serve un indirizzo email"),
+    "Коробка с таким номером лежит в корзине. Восстановите её или удалите навсегда в настройках.": (
+        "A box with this number is in the trash. Restore it or delete it for good in the settings.",
+        "Un carton portant ce numéro est dans la corbeille. Restaurez-le ou supprimez-le définitivement dans les paramètres.",
+        "Una scatola con questo numero è nel cestino. Ripristinala o eliminala definitivamente nelle impostazioni.",
+    ),
+    "В корзине нет такой коробки": ("There is no such box in the trash", "Ce carton n’est pas dans la corbeille", "Questa scatola non è nel cestino"),
+    "Сначала сохраните ключ и модель Grok": ("Save the Grok key and model first", "Enregistrez d’abord la clé et le modèle Grok", "Salva prima la chiave e il modello Grok"),
+    "Промпт": ("Prompt", "Prompt", "Prompt"),
     "Распознавание фотографий выключено": (
         "Photo recognition is turned off",
         "La reconnaissance des photos est désactivée",
