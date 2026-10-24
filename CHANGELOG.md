@@ -19,7 +19,7 @@
 
 - A photo saved while editing a card wiped the text typed so far about ten seconds later, when recognition finished and the card was drawn again. The photo description and the history are now redrawn on their own; so is the photo description shown or hidden with its button, which wiped the text the same way.
 - On an iPhone the page zoomed in on a field and no longer fitted the screen: fields use 16 px text on phones. The header of the page and of the card take less room there, and long words in a card wrap.
-- A preview could not be deployed once the account held ten CloudFront public keys (`TooManyPublicKeys`), a limit that is not raised. A preview (`<name>-pr<N>`) now signs photo cookies with the key of the main site, which publishes its ids in the SSM parameter `/<name>/cloudfront-key`; only the main site makes a key. `media_key_from` names another stack to borrow from, or `""` for a key of its own. The main site has to be deployed with this version before the first such preview.
+- A preview could not be deployed once the account held ten CloudFront public keys (`TooManyPublicKeys`), a limit that is not raised. A preview (`<name>-pr<N>`) now signs photo cookies with the key of the main site, which publishes its ids in the SSM parameter `/<name>/cloudfront-key-ids`; only the main site makes a key. `media_key_from` names another stack to borrow from, or `""` for a key of its own. The main site has to be deployed with this version before the first such preview.
 
 ## v1.5.0
 
