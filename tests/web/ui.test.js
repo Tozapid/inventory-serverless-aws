@@ -661,7 +661,7 @@ test("the new password is typed twice", async (t) => {
   await again.type("new-Password-13");
   await clickText(page, ".settings-body button", "Change password");
   await until(async () => (await text(page, ".settings-body .error")) === "The new passwords do not match", "mismatch message");
-  await again.click({ clickCount: 3 });
+  await again.click({ count: 3 });
   await again.type("new-Password-12");
   await clickText(page, ".settings-body button", "Change password");
   await until(async () => (await text(page, ".toast")) === "Password changed", "changed message");
@@ -766,9 +766,9 @@ test("labels: size, font and text are chosen and kept", async (t) => {
   assert.equal(await page.$(".label-preview .label-name"), null, "no name by default");
 
   const [width, height] = await page.$$(".label-settings .label-size:first-child input");
-  await width.click({ clickCount: 3 });
+  await width.click({ count: 3 });
   await width.type("50");
-  await height.click({ clickCount: 3 });
+  await height.click({ count: 3 });
   await height.type("30");
   await page.select(".label-settings select", "serif");
   await clickText(page, ".label-show label", "Name");

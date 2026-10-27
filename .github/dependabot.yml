@@ -28,3 +28,8 @@ updates:
       npm:
         applies-to: version-updates
         patterns: ["*"]
+    # The page loads qrcode-generator from jsDelivr at the version pinned in
+    # web/index.html (with its SRI hash); the tests use the same file, so the
+    # two are updated together by hand.
+    ignore:
+      - dependency-name: qrcode-generator
