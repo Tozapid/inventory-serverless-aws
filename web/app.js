@@ -274,19 +274,34 @@
     throw new Error(t("В буфере нет изображения"));
   }
 
+  // Fills the canvas with the photo, cropped to its shape.
+  async function drawPreview(canvas, file) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.max(canvas.width / bitmap.width, canvas.height / bitmap.height);
+    const width = bitmap.width * scale;
+    const height = bitmap.height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+    if (bitmap.close) bitmap.close();
+  }
+
   function photoPicker(caption) {
     const input = el("input", { type: "file", accept: "image/jpeg,image/png,image/webp" });
-    const preview = el("img", { class: "paste-preview", alt: "" });
+    // The preview is drawn on a canvas from the file itself: no address made
+    // from the picked file goes into the page.
+    const preview = el("canvas", { class: "paste-preview", width: "144", height: "108", "aria-hidden": "true" });
     preview.hidden = true;
     const status = el("span", { class: "muted small" }, t("Файл или ⌘V / Ctrl+V"));
-    let previewUrl = "";
-    input.addEventListener("change", () => {
+    input.addEventListener("change", async () => {
       const file = input.files && input.files[0];
       if (!file) return;
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = URL.createObjectURL(file);
-      preview.src = previewUrl;
-      preview.hidden = false;
+      try {
+        await drawPreview(preview, file);
+        preview.hidden = false;
+      } catch (error) {
+        preview.hidden = true;
+      }
       status.textContent = file.name && !file.name.startsWith("clipboard.") ? file.name : t("Изображение из буфера");
     });
     const node = el("div", { class: "photo-picker" }, [

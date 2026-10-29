@@ -643,6 +643,10 @@ test("a new box is created and opened", async (t) => {
   const [description, contents] = await page.$$("form.composer textarea");
   await description.type("Garden hoses");
   await contents.type("- 25 m hose\n- Spray gun");
+  const input = await page.$("form.composer input[type=file]");
+  await input.uploadFile(path.join(SEED, "photos", "cables-thumb.jpg"));
+  await page.waitForSelector("form.composer canvas.paste-preview:not([hidden])");
+  assert.ok(await page.$eval("form.composer canvas.paste-preview", (canvas) => canvas.getContext("2d").getImageData(72, 54, 1, 1).data[3] > 0), "the preview shows the photo");
   await clickText(page, "form.composer button", "Create");
   await until(() => api.boxes.has("20"), "box saved");
   assert.deepEqual(api.routes("POST /boxes")[0].body, { number: "20", description: "Garden hoses", contents: "- 25 m hose\n- Spray gun" });
