@@ -104,6 +104,8 @@ function fakeApi() {
   const boxes = new Map();
   const history = new Map();
   const trash = new Map();
+  // Drafts by box number; "" is the new box form.
+  const drafts = new Map();
   const calls = [];
   let rerun = null;
   const users = [
@@ -159,8 +161,17 @@ function fakeApi() {
       if (sort === "created") items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return [200, { items, next_cursor: null, urls_expire_at: "2026-09-01T11:00:00Z" }];
     }
+    const draft = /^\/drafts\/(?:new|boxes\/([^/]+))$/.exec(url.pathname.replace(/^\/api/, ""));
+    if (route === "GET /drafts") return [200, { items: [...drafts.values()] }];
+    if (draft) {
+      const number = draft[1] ? decodeURIComponent(draft[1]) : "";
+      if (method === "DELETE") drafts.delete(number);
+      else drafts.set(number, { new: !number, number: number || body.number || "", description: "", contents: "", note: "", version: 0, ...body, saved_at: "2026-10-20T10:00:00Z" });
+      return [200, method === "DELETE" ? { deleted: true } : drafts.get(number)];
+    }
     if (route === "POST /boxes") {
       if (boxes.has(body.number)) return [409, { error: "A box with this number already exists" }];
+      drafts.delete("");
       const box = { number: body.number, description: body.description, contents: body.contents, photo: null, hidden: "", history: [] };
       boxes.set(box.number, box);
       history.set(box.number, body.contents ? [{ at: "2026-09-02T10:00:00Z", by: ADMIN.email, before: "", after: body.contents, note: "Создание коробки" }] : []);
@@ -174,6 +185,7 @@ function fakeApi() {
     if (method === "GET" && hist) return [200, { items: history.get(decodeURIComponent(hist[1])) || [] }];
     if (method === "PATCH" && one) {
       const box = boxes.get(decodeURIComponent(one[1]));
+      drafts.delete(box.number);
       Object.assign(box, { description: body.description, contents: body.contents, updated: "2026-10-10T12:00:00Z" });
       return [200, card(box)];
     }
@@ -257,7 +269,7 @@ function fakeApi() {
     }
   }
 
-  return { boxes, trash, calls, handle, routes: (route) => calls.filter((call) => call.route === route) };
+  return { boxes, trash, drafts, calls, handle, routes: (route) => calls.filter((call) => call.route === route) };
 }
 
 const executablePath = chromePath();
@@ -519,6 +531,10 @@ test("the photo view follows the list order row by row", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
   const { page } = wiki;
+  await page.waitForSelector(".box-row");
+  // The list column dragged wide enough for three photos in a row.
+  await page.evaluate(() => localStorage.setItem("inventory-list-width", "760"));
+  await page.reload();
   await page.waitForSelector(".box-row");
   await clickText(page, ".seg button", "Photos");
   await page.waitForSelector(".gallery .tile");
@@ -856,25 +872,32 @@ test("the interface follows the chosen language", async (t) => {
   assert.equal(await text(page, ".login button.primary"), "Accedi");
 });
 
-test("an open card takes most of the width, the list a narrow column", async (t) => {
+test("the list column is dragged wider or narrower, the same with a card or without, and kept", async (t) => {
   const wiki = await openInventory(t);
   if (!wiki) return;
   const { page } = wiki;
   await page.waitForSelector(".box-row");
-  const widths = () => page.evaluate(() => ({
-    page: document.querySelector(".workspace").clientWidth,
-    list: document.getElementById("catalog").offsetWidth,
-    card: document.getElementById("detail").offsetWidth,
-  }));
-  const closed = await widths();
-  assert.ok(closed.list > closed.page * 0.6, "without a card the list is wide");
+  const listWidth = () => page.$eval("#catalog", (node) => Math.round(node.getBoundingClientRect().width));
+  const before = await listWidth();
   await page.click(".box-row");
   await page.waitForSelector("#detail .detail-tools");
-  const open = await widths();
-  assert.ok(open.list <= open.page * 0.25, "the list narrows: " + open.list + " of " + open.page);
-  assert.ok(open.card > open.page * 0.7, "the card widens: " + open.card);
+  assert.equal(await listWidth(), before, "opening a card keeps the width");
   const [photo, text] = await page.$$eval("#detail .card-body > div", (nodes) => nodes.map((node) => node.getBoundingClientRect().top));
   assert.equal(Math.round(photo), Math.round(text), "photo and text side by side");
+
+  const bar = await page.$eval(".splitter", (node) => { const box = node.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + 100 }; });
+  await page.mouse.move(bar.x, bar.y);
+  await page.mouse.down();
+  await page.mouse.move(bar.x + 150, bar.y, { steps: 5 });
+  await page.mouse.up();
+  const dragged = await listWidth();
+  assert.ok(Math.abs(dragged - before - 150) <= 2, "dragged by 150 px: " + before + " → " + dragged);
+
+  await page.reload();
+  await page.waitForSelector(".box-row");
+  assert.equal(await listWidth(), dragged, "kept after a reload, without a card");
+  await page.click(".splitter", { count: 2 });
+  assert.equal(await listWidth(), before, "a double click brings the default back");
 });
 
 test("on a phone nothing is wider than the screen, and fields do not make it zoom", async (t) => {
@@ -898,7 +921,7 @@ test("on a phone nothing is wider than the screen, and fields do not make it zoo
   assert.deepEqual(await wider(), []);
 });
 
-test("editing: the fields grow with the text, and Cancel and Close ask first", async (t) => {
+test("editing: the fields grow with the text, and Cancel asks first", async (t) => {
   const api = fakeApi();
   api.boxes.get("2").contents = Array.from({ length: 30 }, (_, index) => "- item " + index).join("\n");
   const wiki = await openInventory(t, { at: "/box/2", api });
@@ -925,12 +948,46 @@ test("editing: the fields grow with the text, and Cancel and Close ask first", a
   await clickText(page, "#detail form.stack button", "Cancel");
   assert.equal(asked.length, 1, "nothing changed: no question");
 
+});
+
+test("drafts: what is typed outlives closing the card and a reload, Cancel deletes it", async (t) => {
+  const wiki = await openInventory(t, { at: "/box/2" });
+  if (!wiki) return;
+  const { page, api } = wiki;
+  const asked = [];
+  page.on("dialog", (dialog) => asked.push(dialog.message()));
+  await page.waitForSelector("#detail .detail-tools");
   await page.keyboard.press("KeyI");
   await page.waitForSelector("#detail form.stack textarea");
-  await page.type("#detail form.stack textarea", "x");
+  await page.type("#detail form.stack textarea", "Draft text ");
   await clickText(page, "#detail .detail-tools button", "Close");
-  assert.equal(asked.length, 2);
-  await until(async () => (await page.evaluate(() => location.pathname)) === "/", "closed after the question");
+  await until(async () => (await page.evaluate(() => location.pathname)) === "/", "closed without a question");
+  assert.deepEqual(asked, []);
+  await until(() => api.drafts.has("2"), "the draft is kept by the API");
+  assert.match(api.drafts.get("2").description, /^Draft text /);
+  await page.waitForFunction(() => [...document.querySelectorAll(".box-row")].some((row) => row.querySelector(".plate").textContent === "2" && row.querySelector(".draft-mark")));
+
+  await page.reload();
+  await page.waitForSelector(".box-row .draft-mark");
+  await clickText(page, ".box-row .plate", "2");
+  await page.waitForSelector("#detail form.stack .draft-note");
+  assert.match(await page.$eval("#detail form.stack textarea", (node) => node.value), /^Draft text /, "the card opens being edited, with the draft");
+
+  await clickText(page, "#detail form.stack button", "Cancel");
+  assert.deepEqual(asked, ["Discard unsaved changes?"]);
+  await until(() => !api.drafts.has("2"), "Cancel deletes the draft");
+  await until(async () => !(await page.$(".box-row .draft-mark")), "and its mark");
+
+  await clickText(page, "button", "New box");
+  await page.waitForSelector("form.composer input");
+  await page.type("form.composer input", "77");
+  await until(() => api.drafts.has(""), "the new box form has a draft too");
+  await clickText(page, "button", "Hide the form");
+  await clickText(page, "button", "New boxdraft");
+  assert.equal(await page.$eval("form.composer input", (node) => node.value), "77");
+  await clickText(page, "form.composer button", "Create");
+  await until(() => api.boxes.has("77"), "created");
+  assert.equal(api.drafts.has(""), false, "creating the box deletes the draft");
 });
 
 test("a photo saved while editing keeps the text, recognition fills in on its own", async (t) => {

@@ -533,7 +533,7 @@ class TurnedPhotoTest(unittest.TestCase):
         body, hidden, history = self.complete(keep_description=True)
         self.assertEqual((body["hidden_text"], hidden), ("Синие провода", "Синие провода"))
         self.assertFalse(body["recognition_pending"])
-        self.assertEqual((self.queued, self.fields(history)), ([], ["photo"]))
+        self.assertEqual((self.queued, self.fields(history)), ([], []), "no history entry")
 
     def test_a_new_photo_is_recognized_again(self):
         body, hidden, history = self.complete()
@@ -1006,9 +1006,15 @@ class PhotoHistoryTest(unittest.TestCase):
             if "Put" in action:
                 self.table.put_item({key: load(value) for key, value in action["Put"]["Item"].items()})
             elif "Update" in action:
-                row = self.table.rows[("BOX#5", "META")]
-                row.update(photo_key=load(action["Update"]["ExpressionAttributeValues"][":p"]),
-                           thumb_key=load(action["Update"]["ExpressionAttributeValues"][":t"]))
+                update = action["Update"]
+                row = self.table.rows[(load(update["Key"]["pk"]), load(update["Key"]["sk"]))]
+                values = {key: load(value) for key, value in update["ExpressionAttributeValues"].items()}
+                if row["sk"] == "META":
+                    row.update(photo_key=values[":p"], thumb_key=values[":t"])
+                else:
+                    for part in update["UpdateExpression"].removeprefix("SET ").split(", "):
+                        name, value = part.split(" = ")
+                        row[name] = values[value]
 
     def test_the_old_photo_stays_and_the_history_shows_both(self):
         status, _ = call("POST", "/api/boxes/5/photo/complete", {"original_key": self.NEW[0], "thumb_key": self.NEW[1]})
@@ -1017,6 +1023,16 @@ class PhotoHistoryTest(unittest.TestCase):
         [entry] = call("GET", "/api/boxes/5/history")[1]["items"]
         self.assertEqual(entry["field"], "photo")
         self.assertEqual((entry["before_photo_url"], entry["after_thumb_url"]), ("/media/" + self.OLD[0], "/media/" + self.NEW[1]))
+
+    def test_a_turned_photo_replaces_the_old_one_without_an_entry(self):
+        call("POST", "/api/boxes/5/photo/complete", {"original_key": self.NEW[0], "thumb_key": self.NEW[1]})
+        turned = ("boxes/5/original/" + "d" * 32 + ".jpg", "boxes/5/thumb/" + "d" * 32 + ".jpg")
+        self.bucket.keys.update(turned)
+        status, _ = call("POST", "/api/boxes/5/photo/complete", {"original_key": turned[0], "thumb_key": turned[1], "keep_description": True})
+        self.assertEqual(status, 200)
+        [entry] = call("GET", "/api/boxes/5/history")[1]["items"]
+        self.assertEqual((entry["before_photo_url"], entry["after_thumb_url"]), ("/media/" + self.OLD[0], "/media/" + turned[1]), "the entry shows the turned photo")
+        self.assertEqual(self.bucket.keys, set(self.OLD + turned), "the photo before the turn is gone")
 
     def test_deleting_the_entry_deletes_a_photo_nothing_shows(self):
         call("POST", "/api/boxes/5/photo/complete", {"original_key": self.NEW[0], "thumb_key": self.NEW[1]})
@@ -1054,7 +1070,7 @@ class TrashTest(unittest.TestCase):
                 self.table.put_item(item)
             elif "Delete" in action:
                 key = action["Delete"]["Key"]
-                self.table.rows.pop((load(key["pk"]), load(key["sk"])))
+                self.table.rows.pop((load(key["pk"]), load(key["sk"])), None)
 
     def numbers(self):
         return [item["number"] for item in call("GET", "/api/boxes")[1]["items"]]
@@ -1089,6 +1105,56 @@ class TrashTest(unittest.TestCase):
         self.assertEqual(call("DELETE", "/api/trash/7", groups="[admins]")[0], 200)
         self.assertEqual((self.table.rows, self.bucket.keys), ({}, set()))
         self.assertEqual(call("POST", "/api/trash/7/restore")[0], 404)
+
+
+class DraftTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.update(TABLE_NAME="boxes", MEDIA_BUCKET="media")
+        self.table = lambda_app._table = ScanTable([dict(meta("7", "Лампы"), description="Свет")])
+        self.saved = lambda_app.transact
+        lambda_app.transact = self.apply
+
+    def tearDown(self):
+        lambda_app.transact = self.saved
+        lambda_app._table = None
+
+    def apply(self, actions):
+        from boto3.dynamodb.types import TypeDeserializer
+
+        load = TypeDeserializer().deserialize
+        for action in actions:
+            if "Put" in action:
+                self.table.put_item({key: load(value) for key, value in action["Put"]["Item"].items()})
+            elif "Delete" in action:
+                key = action["Delete"]["Key"]
+                self.table.rows.pop((load(key["pk"]), load(key["sk"])), None)
+
+    def drafts(self, email="person@example.com"):
+        return call("GET", "/api/drafts", email=email)[1]["items"]
+
+    def test_a_draft_is_kept_as_typed_for_its_user_alone(self):
+        status, draft = call("PUT", "/api/drafts/boxes/7", {"description": "Свет ", "contents": "- лампа\n", "note": "", "version": 1})
+        self.assertEqual((status, draft["number"], draft["contents"], draft["version"]), (200, "7", "- лампа\n", 1))
+        call("PUT", "/api/drafts/new", {"number": "8", "description": "Новая"})
+        self.assertEqual(sorted((item["new"], item["number"], item["description"]) for item in self.drafts()), [(False, "7", "Свет "), (True, "8", "Новая")])
+        self.assertEqual(self.drafts("other@example.com"), [])
+
+    def test_saving_the_card_deletes_its_draft(self):
+        call("PUT", "/api/drafts/boxes/7", {"description": "Свет и лампы", "version": 1})
+        status, _ = call("PATCH", "/api/boxes/7", {"description": "Свет и лампы", "contents": "Лампы", "version": 1})
+        self.assertEqual((status, self.drafts()), (200, []))
+
+    def test_creating_a_box_deletes_the_new_box_draft(self):
+        call("PUT", "/api/drafts/new", {"number": "8"})
+        self.assertEqual(call("POST", "/api/boxes", {"number": "8"})[0], 201)
+        self.assertEqual(self.drafts(), [])
+
+    def test_a_draft_is_deleted_and_checked(self):
+        call("PUT", "/api/drafts/boxes/7", {"contents": "x"})
+        self.assertEqual(call("DELETE", "/api/drafts/boxes/7")[0], 200)
+        self.assertEqual(self.drafts(), [])
+        self.assertEqual(call("PUT", "/api/drafts/boxes/a b", {})[0], 400)
+        self.assertEqual(call("PUT", "/api/drafts/new", {"contents": "x" * 20001})[0], 400)
 
 
 class RerunTest(unittest.TestCase):

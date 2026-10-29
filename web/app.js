@@ -27,6 +27,12 @@
     historyOpen: false,
     awaitRecognition: null,
     urlsExpireAt: null,
+    // Unsaved edits the API keeps: by box number, and the new box form.
+    drafts: new Map(),
+    newDraft: null,
+    // The draft savers of the card being edited and of the new box form.
+    editSaver: null,
+    composerSaver: null,
   };
   let pool = null;
 
@@ -523,6 +529,7 @@
   }
 
   function signOut() {
+    stopSavers();
     const user = pool && pool.getCurrentUser();
     if (user) user.signOut();
     clearTimeout(refreshTimer);
@@ -606,16 +613,100 @@
         el("div", { class: "who" }, [
           el("span", {}, state.email),
           el("button", { class: "icon-button", type: "button", onclick: () => showSettings() }, t("Настройки")),
-          el("button", { class: "icon-button", type: "button", onclick: signOut }, t("Выйти")),
+          el("button", { class: "icon-button", type: "button", onclick: async () => { await flushDrafts(); signOut(); } }, t("Выйти")),
         ]),
       ]),
       el("div", { class: "workspace" }, [
         el("section", { class: "catalog", id: "catalog" }),
+        columnSplitter(),
         el("aside", { class: "detail is-empty", id: "detail" }),
       ]),
     ]));
+    applyListWidth(savedListWidth());
     renderCatalog();
     renderDetail();
+  }
+
+  // The list column is as wide as it was dragged to, with a card open or not;
+  // the width stays in this browser. A double click (or Home) goes back to
+  // the default, the arrow keys move it by steps.
+  const LIST_WIDTH_KEY = "inventory-list-width";
+  const LIST_MIN = 220;
+
+  function savedListWidth() {
+    try {
+      const value = parseInt(window.localStorage.getItem(LIST_WIDTH_KEY), 10);
+      return value >= LIST_MIN ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function applyListWidth(width) {
+    const workspace = document.querySelector(".workspace");
+    if (!workspace) return;
+    if (width) workspace.style.setProperty("--list-width", width + "px");
+    else workspace.style.removeProperty("--list-width");
+  }
+
+  function saveListWidth(width) {
+    applyListWidth(width);
+    try {
+      if (width) window.localStorage.setItem(LIST_WIDTH_KEY, String(width));
+      else window.localStorage.removeItem(LIST_WIDTH_KEY);
+    } catch (error) {
+      // Kept for this page only.
+    }
+  }
+
+  function columnSplitter() {
+    const list = () => document.getElementById("catalog");
+    const clamp = (width) => {
+      const workspace = document.querySelector(".workspace");
+      const max = workspace ? workspace.clientWidth - 400 : width;
+      return Math.round(Math.max(LIST_MIN, Math.min(width, max)));
+    };
+    let start = null;
+    return el("div", {
+      class: "splitter",
+      role: "separator",
+      tabindex: "0",
+      "aria-orientation": "vertical",
+      "aria-label": t("Ширина списка"),
+      title: t("Перетащите, чтобы изменить ширину; двойной щелчок вернёт обычную"),
+      onpointerdown: (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        start = { x: event.clientX, width: list().getBoundingClientRect().width };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        document.body.classList.add("resizing");
+      },
+      onpointermove: (event) => {
+        if (start) applyListWidth(clamp(start.width + event.clientX - start.x));
+      },
+      onpointerup: (event) => {
+        if (!start) return;
+        const width = clamp(start.width + event.clientX - start.x);
+        start = null;
+        document.body.classList.remove("resizing");
+        saveListWidth(width);
+      },
+      onpointercancel: () => {
+        start = null;
+        document.body.classList.remove("resizing");
+        applyListWidth(savedListWidth());
+      },
+      ondblclick: () => saveListWidth(null),
+      onkeydown: (event) => {
+        const step = event.shiftKey ? 80 : 20;
+        const width = list().getBoundingClientRect().width;
+        if (event.key === "ArrowLeft") saveListWidth(clamp(width - step));
+        else if (event.key === "ArrowRight") saveListWidth(clamp(width + step));
+        else if (event.key === "Home") saveListWidth(null);
+        else return;
+        event.preventDefault();
+      },
+    });
   }
 
   function setMode(mode) {
@@ -646,7 +737,9 @@
         ["updated", t("Сначала изменённые")],
         ["created", t("Сначала новые")],
       ].map(([value, label]) => el("option", { value, selected: state.sort === value ? "selected" : null }, label))),
-      el("button", { class: "primary", type: "button", onclick: toggleComposer }, composerOpen ? t("Скрыть форму") : t("Новая коробка"))
+      el("button", { class: "primary", type: "button", onclick: toggleComposer }, composerOpen
+        ? t("Скрыть форму")
+        : [t("Новая коробка"), state.newDraft ? el("span", { class: "draft-mark" }, t("черновик")) : null])
     );
     const slot = document.getElementById("composer-slot");
     if (!composerOpen) slot.replaceChildren();
@@ -669,30 +762,57 @@
 
   let composerOpen = false;
 
-  // Closing a form with something typed in it asks first.
+  // Hiding the new box form keeps what is typed in it as a draft.
   function toggleComposer() {
-    const form = document.querySelector("form.composer");
-    if (composerOpen && form && formHasText(form) && !window.confirm(t("Отменить несохранённые изменения?"))) return;
+    if (composerOpen) keepComposer();
     composerOpen = !composerOpen;
     renderCatalog();
   }
 
+  function keepComposer() {
+    if (state.composerSaver) state.composerSaver.finish();
+    state.composerSaver = null;
+  }
+
+  // Cancel (Esc) throws the typed text and its draft away, asking first.
+  async function discardComposer() {
+    const form = document.querySelector("form.composer");
+    if (form && formHasText(form) && !window.confirm(t("Отменить несохранённые изменения?"))) return;
+    const saver = state.composerSaver;
+    state.composerSaver = null;
+    composerOpen = false;
+    renderCatalog();
+    await discardDraft(null, saver);
+  }
+
   function composerNode() {
     if (!composerOpen) return null;
-    const number = el("input", { required: "required", maxlength: "41", autocomplete: "off" });
-    const description = el("textarea", { maxlength: "4000" });
-    const contents = el("textarea", { maxlength: "20000" });
+    const kept = state.newDraft;
+    const number = el("input", { required: "required", maxlength: "41", autocomplete: "off", value: kept ? kept.number : "" });
+    const description = el("textarea", { maxlength: "4000" }, kept ? kept.description : "");
+    const contents = el("textarea", { maxlength: "20000" }, kept ? kept.contents : "");
     const photo = photoPicker(t("Фотография"));
     const error = el("p", { class: "error" });
+    // The photo is not part of the draft: it is only in this browser.
+    const saver = draftSaver(null, () => {
+      const values = { number: number.value, description: description.value, contents: contents.value };
+      return Object.values(values).some((value) => value.trim()) ? values : null;
+    });
+    if (state.composerSaver) state.composerSaver.finish();
+    state.composerSaver = saver;
     return el("form", {
       class: "composer",
+      oninput: (event) => { if (event.target.type !== "file") saver.schedule(); },
       onsubmit: async (event) => {
         event.preventDefault();
         error.textContent = "";
         const button = event.target.querySelector("button[type=submit]");
         button.disabled = true;
+        // Creating the box deletes the draft; none may be sent after it.
+        await saver.stop();
+        let created = null;
         try {
-          const created = await api("/boxes", {
+          created = await api("/boxes", {
             method: "POST",
             body: {
               number: number.value.trim(),
@@ -700,6 +820,8 @@
               contents: contents.value,
             },
           });
+          setDraft(null, null);
+          if (state.composerSaver === saver) state.composerSaver = null;
           if (photo.input.files[0]) {
             button.textContent = t("Загрузка фотографии…");
             await uploadPhoto(created.number, photo.input.files[0]);
@@ -712,17 +834,23 @@
           error.textContent = err.message;
           button.disabled = false;
           button.textContent = t("Создать");
+          // Not created: the edits go on into the draft.
+          if (!created) {
+            saver.resume();
+            saver.schedule();
+          }
         }
       },
     }, [
       el("h3", {}, t("Новая коробка")),
+      draftNote(kept),
       el("label", {}, [t("Номер"), number]),
       markdownField(t("Описание"), description, el("div", { class: "md" })),
       markdownField(t("Содержимое"), contents, el("div", { class: "md" })),
       photo.node,
       el("div", { class: "row-actions" }, [
         el("button", { class: "primary", type: "submit", title: SAVE_KEYS }, t("Создать")),
-        el("button", { class: "ghost", type: "button", onclick: toggleComposer }, t("Отмена")),
+        el("button", { class: "ghost", type: "button", onclick: discardComposer }, t("Отмена")),
       ]),
       error,
     ]);
@@ -806,6 +934,7 @@
     ])];
     if (rest) parts.push(markdownNode(rest, true));
     if (item.history_match) parts.push(el("span", { class: "history-match" }, t("найдено в истории")));
+    if (state.drafts.has(item.number)) parts.push(el("span", { class: "draft-mark" }, t("черновик")));
     if (state.sort === "updated") parts.push(el("span", { class: "muted small" }, t("Изменена {when}", { when: formatWhen(item.updated_at) })));
     if (state.sort === "created") parts.push(el("span", { class: "muted small" }, t("Добавлена {when}", { when: formatWhen(item.created_at) })));
     return parts;
@@ -820,13 +949,9 @@
   // redraws the card being edited with what the API has now.
   async function openBox(number, mode) {
     if (state.editing && state.selected === number && mode !== "reload") return;
-    if (state.selected !== number && !confirmDiscard()) {
-      // Back or forward has already changed the address: put it back.
-      if (mode === "none") setRoute(state.selected, "push");
-      return;
-    }
     const ticket = ++openTicket;
     if (state.selected !== number) {
+      keepEdit();
       state.editing = false;
       state.showHidden = false;
       state.historyOpen = false;
@@ -847,6 +972,8 @@
       if (ticket !== openTicket) return;
       state.detail = card;
       state.history = history.items || [];
+      // A card with a draft opens being edited, with the draft's text.
+      if (state.drafts.has(number)) state.editing = true;
       renderDetail();
     } catch (error) {
       if (ticket !== openTicket) return;
@@ -868,7 +995,7 @@
   }
 
   function closeDetail() {
-    if (!confirmDiscard()) return;
+    keepEdit();
     state.selected = null;
     state.detail = null;
     state.history = [];
@@ -984,7 +1111,7 @@
       el("button", {
         class: "ghost",
         type: "button",
-        title: t("Закрыть карточку и не записывать текст"),
+        title: t("Закрыть карточку; несохранённый текст останется черновиком"),
         onclick: closeDetail,
       }, t("Закрыть")),
     ]);
@@ -1067,15 +1194,27 @@
       );
       return;
     }
-    const description = el("textarea", { maxlength: "4000", rows: "3" }, card.description || "");
-    const contents = el("textarea", { maxlength: "20000", rows: "8" }, card.contents || "");
-    const note = el("input", { maxlength: "500", placeholder: t("Зачем поменяли содержимое") });
+    // A form drawn again takes the text its draft has now.
+    if (state.editSaver) state.editSaver.finish();
+    const kept = state.drafts.get(card.number);
+    const description = el("textarea", { maxlength: "4000", rows: "3" }, kept ? kept.description : card.description || "");
+    const contents = el("textarea", { maxlength: "20000", rows: "8" }, kept ? kept.contents : card.contents || "");
+    const note = el("input", { maxlength: "500", placeholder: t("Зачем поменяли содержимое"), value: kept ? kept.note : "" });
     const error = el("p", { class: "error" });
+    // The draft remembers the version of the card it began from.
+    const base = kept && kept.version ? kept.version : card.version;
+    const saver = draftSaver(card.number, () => (description.value !== (card.description || "") || contents.value !== (card.contents || "") || note.value.trim()
+      ? { description: description.value, contents: contents.value, note: note.value, version: base }
+      : null));
+    state.editSaver = saver;
     const form = el("form", {
       class: "stack",
+      oninput: (event) => { if (event.target.type !== "file") saver.schedule(); },
       onsubmit: async (event) => {
         event.preventDefault();
         error.textContent = "";
+        // Saving deletes the draft; none may be sent after it.
+        await saver.stop();
         try {
           const saved = await api("/boxes/" + encodeURIComponent(card.number), {
             method: "PATCH",
@@ -1086,6 +1225,8 @@
               version: card.version,
             },
           });
+          setDraft(card.number, null);
+          if (state.editSaver === saver) state.editSaver = null;
           state.editing = false;
           state.detail = saved;
           await openBox(card.number);
@@ -1093,7 +1234,12 @@
           toast(t("Карточка сохранена"));
         } catch (err) {
           error.textContent = err.message;
-          if (err.status === 409) openBox(card.number, "reload");
+          saver.resume();
+          // The card changed elsewhere: it is drawn again with the draft.
+          if (err.status === 409) {
+            saver.flush();
+            openBox(card.number, "reload");
+          } else saver.schedule();
         }
       },
     }, [
@@ -1105,11 +1251,7 @@
         el("button", {
           class: "ghost",
           type: "button",
-          onclick: () => {
-            if (!confirmDiscard()) return;
-            state.editing = false;
-            renderDetail();
-          },
+          onclick: discardEdit,
         }, t("Отмена")),
         el("button", {
           class: "danger",
@@ -1117,7 +1259,11 @@
           onclick: async () => {
             if (!window.confirm(t("Удалить коробку {number}? Её можно будет восстановить из корзины в настройках.", { number: card.number }))) return;
             try {
+              await saver.stop();
               await api("/boxes/" + encodeURIComponent(card.number), { method: "DELETE" });
+              // The API deletes the draft with the box.
+              setDraft(card.number, null);
+              state.editSaver = null;
               state.editing = false;
               closeDetail();
               await loadBoxes(false);
@@ -1130,6 +1276,7 @@
       ]),
       error,
     ]);
+    form.prepend(draftNote(kept, card));
     node.replaceChildren(el("div", { class: "detail-top" }, [head, tools]), body([frame, photoActions, recognition], [form]), historyBlock());
     [description, contents].forEach(fitHeight);
   }
@@ -2419,8 +2566,8 @@
   window.addEventListener("popstate", () => {
     const number = numberFromLocation();
     if (number) openBox(number, "none");
-    else if (!confirmDiscard()) setRoute(state.selected, "push");
     else {
+      keepEdit();
       state.editing = false;
       state.selected = null;
       state.detail = null;
@@ -2490,15 +2637,170 @@
     return [...form.querySelectorAll("input, textarea")].some((field) => (field.type === "file" ? field.files.length : field.value.trim()));
   }
 
-  // Leaving a card being edited, by any way, asks first if anything changed.
-  // true: go on.
-  function confirmDiscard() {
-    return !state.editing || !editChanged() || window.confirm(t("Отменить несохранённые изменения?"));
+  // Leaving a card being edited keeps its text as a draft; Cancel (Esc)
+  // throws it away, asking first if anything changed.
+  function keepEdit() {
+    if (state.editSaver) state.editSaver.finish();
+    state.editSaver = null;
   }
 
+  async function discardEdit() {
+    if (!state.editing) return;
+    if (editChanged() && !window.confirm(t("Отменить несохранённые изменения?"))) return;
+    const saver = state.editSaver;
+    const number = state.selected;
+    state.editSaver = null;
+    state.editing = false;
+    renderDetail();
+    await discardDraft(number, saver);
+  }
+
+  // Drafts -------------------------------------------------------------------
+  // What is typed in a card or in the new box form goes to the API a moment
+  // after typing stops, so that closing the card, a reload or another device
+  // keeps it. number null is the new box form.
+  const DRAFT_DELAY = 800;
+  const savers = new Set();
+
+  function draftPath(number) {
+    return number == null ? "/drafts/new" : "/drafts/boxes/" + encodeURIComponent(number);
+  }
+
+  function getDraft(number) {
+    return number == null ? state.newDraft : state.drafts.get(number);
+  }
+
+  // The list and the New box button mark the boxes that have a draft.
+  function setDraft(number, draft) {
+    const had = Boolean(getDraft(number));
+    if (number == null) state.newDraft = draft;
+    else if (draft) state.drafts.set(number, draft);
+    else state.drafts.delete(number);
+    if (had !== Boolean(draft)) renderCatalog();
+  }
+
+  async function loadDrafts() {
+    try {
+      const data = await api("/drafts");
+      state.drafts = new Map();
+      state.newDraft = null;
+      (data.items || []).forEach((item) => {
+        if (item.new) state.newDraft = item;
+        else state.drafts.set(item.number, item);
+      });
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  // read() gives what the form holds, or null when it holds nothing to keep:
+  // then the draft goes.
+  function draftSaver(number, read) {
+    let timer = null;
+    let running = Promise.resolve();
+    let sending = 0;
+    let closed = false;
+    const saver = {
+      schedule() {
+        if (closed) return;
+        clearTimeout(timer);
+        timer = setTimeout(send, DRAFT_DELAY);
+      },
+      flush() {
+        if (timer) send();
+        return running;
+      },
+      unsent() {
+        return Boolean(timer) || sending > 0;
+      },
+      // The form goes: what is typed goes out, nothing more after it.
+      finish() {
+        saver.flush();
+        closed = true;
+        if (!saver.unsent()) savers.delete(saver);
+      },
+      // Before a save or a discard: nothing more goes out. A failed save
+      // resumes the drafts.
+      async stop() {
+        closed = true;
+        clearTimeout(timer);
+        timer = null;
+        await running;
+        savers.delete(saver);
+      },
+      resume() {
+        closed = false;
+        savers.add(saver);
+      },
+      cancel() {
+        closed = true;
+        clearTimeout(timer);
+        timer = null;
+        savers.delete(saver);
+      },
+    };
+    function send() {
+      clearTimeout(timer);
+      timer = null;
+      const values = read();
+      if (!values && !getDraft(number)) return running;
+      setDraft(number, values ? Object.assign({ new: number == null, number: number == null ? "" : number, note: "", version: 0 }, values, { saved_at: new Date().toISOString() }) : null);
+      sending += 1;
+      running = running
+        .then(() => api(draftPath(number), values ? { method: "PUT", body: values } : { method: "DELETE" }))
+        .catch((error) => toast(error.message))
+        .finally(() => {
+          sending -= 1;
+          if (closed && !saver.unsent()) savers.delete(saver);
+        });
+      return running;
+    }
+    savers.add(saver);
+    return saver;
+  }
+
+  async function discardDraft(number, saver) {
+    if (saver) await saver.stop();
+    if (!getDraft(number)) return;
+    setDraft(number, null);
+    try {
+      await api(draftPath(number), { method: "DELETE" });
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  function flushDrafts() {
+    return Promise.all([...savers].map((saver) => saver.flush()));
+  }
+
+  function stopSavers() {
+    savers.forEach((saver) => saver.cancel());
+    state.editSaver = null;
+    state.composerSaver = null;
+  }
+
+  // Above a form whose text came from a draft: when it was kept, and whether
+  // the card has changed since.
+  function draftNote(kept, card) {
+    if (!kept) return null;
+    const lines = [t("Восстановлен черновик от {when}. «Отмена» удалит его.", { when: formatWhen(kept.saved_at) })];
+    if (card && kept.version && card.version > kept.version) {
+      lines.push(t("Карточку меняли после черновика ({who}, {when}): «Сохранить» запишет текст черновика поверх.", { who: card.updated_by || "—", when: formatWhen(card.updated_at) }));
+    }
+    return el("p", { class: "draft-note small" }, lines.map((line) => el("span", {}, line)));
+  }
+
+  // What is typed goes out before the page closes; the browser asks to stay
+  // while it is still on its way, or while the new box form holds a photo.
   window.addEventListener("beforeunload", (event) => {
-    const composer = document.querySelector("form.composer");
-    if ((state.editing && editChanged()) || (composer && formHasText(composer))) event.preventDefault();
+    flushDrafts();
+    const photo = document.querySelector("form.composer input[type=file]");
+    if ([...savers].some((saver) => saver.unsent()) || (photo && photo.files.length)) event.preventDefault();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushDrafts();
   });
 
   document.addEventListener("keydown", (event) => {
@@ -2524,17 +2826,11 @@
       // Esc works in the fields too: the new box form closes, an edit ends.
       const composer = event.target.closest?.("form.composer");
       if (composer) {
-        if (!formHasText(composer) || window.confirm(t("Отменить несохранённые изменения?"))) {
-          composerOpen = false;
-          renderCatalog();
-        }
+        discardComposer();
         return;
       }
       if (state.editing) {
-        if (confirmDiscard()) {
-          state.editing = false;
-          renderDetail();
-        }
+        discardEdit();
         return;
       }
       if (state.selected && !event.target.closest?.("input, textarea, select")) closeDetail();
@@ -2565,7 +2861,8 @@
     try {
       applySession(await freshSession());
       renderApp();
-      await loadBoxes(false);
+      await Promise.all([loadBoxes(false), loadDrafts()]);
+      renderCatalog();
       const number = numberFromLocation();
       if (number) await openBox(number, "none");
     } catch (error) {
