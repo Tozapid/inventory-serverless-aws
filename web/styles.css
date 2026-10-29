@@ -422,6 +422,29 @@ h3 { font-size: 15px; }
   cursor: pointer;
 }
 
+.draft-mark {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.box-copy > .draft-mark { justify-self: start; margin-left: 0; }
+
+.draft-note {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
 .history-match {
   display: block;
   color: var(--muted);
@@ -432,16 +455,38 @@ h3 { font-size: 15px; }
 .who { display: flex; gap: 4px; align-items: center; }
 .who span { margin-right: 4px; }
 
-/* Without a card the list takes the page; an open card takes most of it and
-   the list keeps a narrow column beside it. */
+/* The list and the card side by side, with a splitter between them. The list
+   keeps its width (--list-width, dragged and kept in the browser) whether a
+   card is open or not; the card always keeps at least 380 px. */
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 20px;
+  grid-template-columns: max(220px, min(var(--list-width, clamp(280px, 30%, 520px)), calc(100% - 392px))) 12px minmax(0, 1fr);
+  column-gap: 4px;
   padding: 20px;
   align-items: start;
 }
-.workspace:has(> .detail:not(.is-empty)) { grid-template-columns: clamp(260px, 20%, 360px) minmax(0, 1fr); }
+
+.splitter {
+  position: sticky;
+  top: 76px;
+  height: calc(100vh - 96px);
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 6px;
+}
+.splitter::after {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 100%;
+  margin: 0 auto;
+  border-radius: 1px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+.splitter:hover::after, .splitter:focus-visible::after, body.resizing .splitter::after { background: var(--accent); }
+.splitter:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
 
 .catalog { min-width: 0; }
 
@@ -571,7 +616,6 @@ h3 { font-size: 15px; }
 .paste-preview {
   width: 72px;
   height: 54px;
-  object-fit: cover;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-2);
@@ -684,7 +728,8 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
   .brand { min-width: 0; flex: 1; }
   .brand span { display: none; }
   .search { order: 3; flex-basis: 100%; }
-  .workspace, .workspace:has(> .detail:not(.is-empty)) { grid-template-columns: 1fr; padding: 12px; }
+  .workspace { grid-template-columns: 1fr; padding: 12px; }
+  .splitter { display: none; }
   .detail {
     position: fixed;
     inset: 0;

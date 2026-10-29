@@ -17,8 +17,9 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 - Boxes with a number (`12`, `A-7`), a description and contents in Markdown; a card per box at `/box/<number>` that can be shared, reloaded or opened in a new tab.
 - Search across number, description and contents, every word has to match; `ё` counts as `е`, accented words stay whole.
 - The list is sorted by index (the box number from `/box/<index>`, with `A-9` before `A-10`), by name (the first line of the description), or with the recently changed or the newest boxes first; the choice is remembered in the browser.
-- Photos: pick a file (on a phone the picker also offers the camera) or paste with ⌘V / Ctrl+V. The browser keeps a 2560 px JPEG for viewing and a 1280 px one for the list; a portrait photo is turned to lie horizontally, and ↺ ↻ turn a saved one while editing the card. A photo gallery view and a full-screen viewer.
-- An open card takes most of the page, with the list in a narrow column beside it; the fields grow with their text.
+- Photos: pick a file (on a phone the picker also offers the camera) or paste with ⌘V / Ctrl+V. The browser keeps a 2560 px JPEG for viewing and a 1280 px one for the list; a portrait photo is turned to lie horizontally, and ↺ ↻ turn a saved one while editing the card: the turned photo takes the place of the old one, without a history entry. A photo gallery view and a full-screen viewer.
+- The list and the card side by side, with a splitter between them: the list column is dragged wider or narrower with the mouse (or the arrow keys), keeps that width with a card open or not, and remembers it in the browser; a double click brings the default back. The fields grow with their text.
+- Drafts: what is typed in a card, or in the new box form, and not saved yet is kept by the API for its user a moment after typing stops, so that it outlives closing the card, a reload and another device. A box with a draft is marked in the list and opens being edited; saving the card or creating the box deletes the draft, Cancel throws it away.
 - History of every change of the contents, of the photo (the earlier and the new one side by side) and of the photo description written by recognition: before, after, who and an optional comment. It is folded under the card until opened. Administrators can delete single entries.
 - Trash: a deleted box waits in Settings → Trash with its history and photos; anyone restores it, administrators delete it for good.
 - Search in the history, off by default: with the "in history" box ticked, search also finds a box by what it used to hold or what its earlier photos showed, and marks such a box "found in history".
@@ -26,7 +27,7 @@ The demo is public and wiped every hour: all boxes, photos, history and users go
 - Optional two-factor authentication with an authenticator app (TOTP), turned on or off in the settings by each user. Changing the password asks for the new one twice.
 - Labels to print on A4 (Settings → Labels): a QR code linking to the card with the box number and/or name in the largest letters that fit; the label size (30 × 50 mm by default) and the font are chosen there and remembered.
 - Settings for administrators: invite, disable and delete users, see who has two-factor authentication and reset it for a lost phone.
-- Keyboard: ⌘Enter / Ctrl+Enter saves a card, I edits it, J and L go to the previous and the next box, Esc leaves editing or closes the card. Leaving an edit with changes, by any way, asks first.
+- Keyboard: ⌘Enter / Ctrl+Enter saves a card, I edits it, J and L go to the previous and the next box, Esc cancels editing or closes the card. Cancel and Esc ask first when the text changed; closing the card or going to another box keeps the text as a draft.
 - Settings → Version: the version of the site and the releases of the demo repository that came after it, with their notes.
 - Interface in English, Russian, French and Italian, following the system language.
 
@@ -200,7 +201,8 @@ cd tests/web && npm ci && npm test
 - identity: only a verified email names the user, so nobody reads another user's settings;
 - error messages in the page language, field names included;
 - administration: only the `admins` group gets in, invite (with and without email), disable, delete, reset two-factor authentication, no locking yourself out;
-- the trash: deleting, restoring and purging a box, its number kept while it waits; photos kept for the history and deleted with their last entry;
+- the trash: deleting, restoring and purging a box, its number kept while it waits; photos kept for the history and deleted with their last entry; a turned photo replacing the old one without an entry;
+- drafts: kept as typed for their user alone, deleted by saving the card or creating the box;
 - recognition again: an own prompt with the language added, every photo in turn, a stop, the rest handed on when time runs short;
 - recognition switched off: no key handed out or saved, nothing queued;
 - CloudFront cookie signing, checked byte for byte against `openssl`;
@@ -211,7 +213,7 @@ cd tests/web && npm ci && npm test
 | File | What it checks |
 | --- | --- |
 | `i18n.test.js` | Every interface string has English, French and Italian text with the same `{placeholders}`, and no Russian text reaches the page without `t()`; the system language is picked unless one was chosen. |
-| `ui.test.js` | The page in headless Chrome against an in-memory API filled with the example boxes: demo sign-in, the example photos and a card opened by its address, search by hidden photo text, creating a box, the code step at sign-in, two-factor authentication in the settings with a real QR code (its integrity hash checked), recognition settings shown only when on, invitations without email and 2FA reset in the users list, switching language; the narrow list beside an open card, nothing wider than a phone screen, growing fields, the questions before leaving an edit, a photo saved while editing keeping the text, the trash, recognizing every photo again. Chrome is found on the usual paths or taken from `CHROME_PATH`; without it these tests are skipped locally and fail in CI. |
+| `ui.test.js` | The page in headless Chrome against an in-memory API filled with the example boxes: demo sign-in, the example photos and a card opened by its address, search by hidden photo text, creating a box, the code step at sign-in, two-factor authentication in the settings with a real QR code (its integrity hash checked), recognition settings shown only when on, invitations without email and 2FA reset in the users list, switching language; the list column dragged, kept and the same with a card or without, drafts kept through closing the card and a reload and deleted by Cancel, nothing wider than a phone screen, growing fields, the questions before cancelling an edit, a photo saved while editing keeping the text, the trash, recognizing every photo again. Chrome is found on the usual paths or taken from `CHROME_PATH`; without it these tests are skipped locally and fail in CI. |
 
 ## Limits
 

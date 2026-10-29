@@ -89,8 +89,21 @@ def handler(event, context):
             result = response(500, {"error": translate(lang, "Внутренняя ошибка")})
     if 200 <= result["statusCode"] < 300:
         attach_media_cookies(result, event)
-    logger.info("%s %s -> %s", method, path, result["statusCode"])
+    logger.info("%s %s -> %s", method, route_label(path), result["statusCode"])
     return result
+
+
+# The log names the route, not the request: box numbers, history ids and
+# whatever else a caller puts in the path stay out of it. Each word comes from
+# this table, never from the request.
+ROUTE_WORDS = {word: word for word in (
+    "api", "me", "version", "admin", "users", "settings", "recognition-log", "recognition",
+    "rerun", "trash", "restore", "boxes", "history", "photo", "complete", "drafts", "new",
+)}
+
+
+def route_label(path):
+    return "/" + "/".join(ROUTE_WORDS.get(part, "*") for part in path.split("/") if part)
 
 
 def route(method, parts, event):
@@ -131,6 +144,12 @@ def route(method, parts, event):
         return get_history(parts[1])
     if len(parts) == 4 and parts[0] == "boxes" and parts[2] == "history" and method == "DELETE":
         return delete_history_entry(parts[1], parts[3], event)
+    if parts == ["drafts"] and method == "GET":
+        return list_drafts(event)
+    if parts == ["drafts", "new"] and method in {"PUT", "DELETE"}:
+        return put_draft(None, event) if method == "PUT" else delete_draft(None, event)
+    if len(parts) == 3 and parts[:2] == ["drafts", "boxes"] and method in {"PUT", "DELETE"}:
+        return put_draft(parts[2], event) if method == "PUT" else delete_draft(parts[2], event)
     if len(parts) == 3 and parts[0] == "boxes" and parts[2] == "photo" and method == "POST":
         return presign_photo(parts[1], event)
     if len(parts) == 4 and parts[0] == "boxes" and parts[2] == "photo" and parts[3] == "complete" and method == "POST":
@@ -357,6 +376,7 @@ def create_box(event):
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
             number, "", contents, now, who, "Создание коробки"
         ))}})
+    actions.append(draft_delete(who, DRAFT_NEW))
     try:
         transact(actions)
     except Exception as exc:
@@ -402,6 +422,7 @@ def update_box(number, event):
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
             number, current.get("contents", ""), contents, now, who, note
         ))}})
+    actions.append(draft_delete(who, draft_sk(number)))
     transact(actions)
     updated = dict(current)
     updated.update({
@@ -412,6 +433,76 @@ def update_box(number, event):
         "version": version + 1,
     })
     return response(200, public_detail(updated))
+
+
+# Drafts -------------------------------------------------------------------
+# What a user has typed in a card, or in the new box form, and not saved yet
+# is kept for that user alone, under USER#<email> with SK=DRAFT#<number>, or
+# DRAFT#NEW for the form, so that it outlives closing the card, a reload and
+# the device. version is the version of the card the edit began from. Saving
+# the card, or creating the box, deletes the draft in the same transaction.
+
+DRAFT_NEW = "DRAFT#NEW"
+
+
+def draft_sk(number):
+    return DRAFT_NEW if number is None else "DRAFT#" + validate_number(number)
+
+
+def draft_delete(who, sk):
+    return {"Delete": {"TableName": table_name(), "Key": {"pk": marshal("USER#" + who), "sk": marshal(sk)}}}
+
+
+def list_drafts(event):
+    from boto3.dynamodb.conditions import Key
+
+    items = []
+    start = None
+    while True:
+        kwargs = {"KeyConditionExpression": Key("pk").eq(user_pk(event)) & Key("sk").begins_with("DRAFT#")}
+        if start:
+            kwargs["ExclusiveStartKey"] = start
+        resp = table().query(**kwargs)
+        items.extend(resp.get("Items", []))
+        start = resp.get("LastEvaluatedKey")
+        if not start:
+            return response(200, {"items": [public_draft(item) for item in items]})
+
+
+# The text is kept as typed, spaces at the ends too; the number of the new box
+# form may not be a valid one yet.
+def put_draft(number, event):
+    sk = draft_sk(number)
+    payload = body_json(event)
+    item = {
+        "pk": user_pk(event),
+        "sk": sk,
+        "number": clean_text(payload.get("number"), 41, "Номер", strip=False) if number is None else number,
+        "description": clean_text(payload.get("description"), 4000, "Описание", strip=False),
+        "contents": clean_text(payload.get("contents"), 20000, "Содержимое", strip=False),
+        "note": clean_text(payload.get("note"), 500, "Комментарий", strip=False),
+        "version": max(as_int(payload.get("version"), 0), 0),
+        "saved_at": now_iso(),
+    }
+    table().put_item(Item=item)
+    return response(200, public_draft(item))
+
+
+def delete_draft(number, event):
+    table().delete_item(Key={"pk": user_pk(event), "sk": draft_sk(number)})
+    return response(200, {"deleted": True})
+
+
+def public_draft(item):
+    return {
+        "new": item.get("sk") == DRAFT_NEW,
+        "number": item.get("number") or "",
+        "description": item.get("description") or "",
+        "contents": item.get("contents") or "",
+        "note": item.get("note") or "",
+        "version": as_int(item.get("version"), 0),
+        "saved_at": item.get("saved_at") or "",
+    }
 
 
 # A deleted box goes to the trash: its card moves from SK=META to SK=TRASH,
@@ -434,6 +525,7 @@ def delete_box(number, event):
             "ConditionExpression": "version = :v",
             "ExpressionAttributeValues": {":v": marshal(as_int(current.get("version"), 1))},
         }},
+        draft_delete(actor(event), draft_sk(number)),
     ])
     return response(200, {"deleted": True, "trash": True})
 
@@ -627,16 +719,23 @@ def complete_photo(number, event):
             "ExpressionAttributeValues": {key: marshal(value) for key, value in values.items()},
         }
     }]
-    # The old photo stays in the bucket, and the history shows it next to the
-    # new one; so does the description of the old photo, which goes with it.
-    photo = history_item(number, "", "", now, who, "Поворот" if keep else "", field="photo")
-    photo.update({
-        "photo_before": current.get("photo_key") or "",
-        "thumb_before": current.get("thumb_key") or "",
-        "photo_after": original_key,
-        "thumb_after": thumb_key,
-    })
-    actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(photo)}})
+    if keep:
+        # A turned photo takes the place of the old one: no history entry, and
+        # the entries that showed the old photo show the turned one, so the old
+        # files go with the cleanup below.
+        actions.extend(turned_photo_updates(number, current, original_key, thumb_key))
+    else:
+        # The old photo stays in the bucket, and the history shows it next to
+        # the new one; so does the description of the old photo, which goes
+        # with it.
+        photo = history_item(number, "", "", now, who, "", field="photo")
+        photo.update({
+            "photo_before": current.get("photo_key") or "",
+            "thumb_before": current.get("thumb_key") or "",
+            "photo_after": original_key,
+            "thumb_after": thumb_key,
+        })
+        actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(photo)}})
     old_hidden = current.get("hidden_text") or ""
     if old_hidden and not keep:
         actions.append({"Put": {"TableName": table_name(), "Item": marshal_item(history_item(
@@ -670,6 +769,24 @@ def complete_photo(number, event):
     body = public_detail(updated)
     body["recognition_pending"] = pending
     return response(200, body)
+
+
+def turned_photo_updates(number, current, original_key, thumb_key):
+    old = current.get("photo_key") or ""
+    actions = []
+    for item in query_all(number):
+        if not item.get("sk", "").startswith("HIST#"):
+            continue
+        sides = [side for side in ("before", "after") if old and item.get("photo_" + side) == old]
+        if not sides:
+            continue
+        actions.append({"Update": {
+            "TableName": table_name(),
+            "Key": {"pk": marshal(item["pk"]), "sk": marshal(item["sk"])},
+            "UpdateExpression": "SET " + ", ".join(f"photo_{side} = :p, thumb_{side} = :t" for side in sides),
+            "ExpressionAttributeValues": {":p": marshal(original_key), ":t": marshal(thumb_key)},
+        }})
+    return actions
 
 
 # Recognition sends photos to Grok with the user's own API key. A public demo
@@ -1125,12 +1242,14 @@ def validate_number(value):
     return value
 
 
-def clean_text(value, limit, field):
+def clean_text(value, limit, field, strip=True):
     if value is None:
         return ""
     if not isinstance(value, str):
         raise ApiError(400, "{field} должно быть текстом", field=field)
-    value = value.replace("\r\n", "\n").strip()
+    value = value.replace("\r\n", "\n")
+    if strip:
+        value = value.strip()
     if len(value) > limit:
         raise ApiError(400, "{field} длиннее {limit} символов", field=field, limit=limit)
     return value
@@ -1810,6 +1929,7 @@ MESSAGES = {
     ),
     "Описание": ("Description", "Description", "Descrizione"),
     "Содержимое": ("Contents", "Contenu", "Contenuto"),
+    "Номер": ("Number", "Numéro", "Numero"),
     "Комментарий": ("Comment", "Commentaire", "Commento"),
     "API-ключ": ("API key", "Clé API", "Chiave API"),
     "Модель": ("Model", "Modèle", "Modello"),

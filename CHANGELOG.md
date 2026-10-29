@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.7.0
+
+### Added
+
+- Drafts: what is typed in a card, or in the new box form, and not saved yet goes to the API a moment after typing stops and is kept for its user, so that it outlives closing the card, a reload and another device. A box with a draft is marked "draft" in the list (and so is the New box button) and opens being edited, with the date of the draft and a warning when the card changed after it. Saving the card or creating the box deletes the draft; so does deleting the box. Cancel and Esc throw it away, asking first when the text changed. The photo of the new box form is not part of the draft. The API keeps drafts under `USER#<email>`, `SK=DRAFT#<number>` or `DRAFT#NEW`: `GET /api/drafts`, `PUT`/`DELETE /api/drafts/boxes/<number>` and `/api/drafts/new`.
+- The list column is dragged wider or narrower with the mouse on the splitter beside it, or with the arrow keys on it (Shift for bigger steps); a double click or Home brings the default back. The width is kept in the browser.
+
+### Changed
+
+- The list keeps its width whether a card is open or not; it no longer narrows when a card opens. Without a card the place of the card stays beside it.
+- Closing a card being edited, opening another box, back and forward and the logo no longer ask about unsaved changes: the text stays as a draft. Hiding the new box form keeps its text too. The browser asks before closing the tab only while a draft is still on its way.
+
+### Fixed
+
+- Turning a photo (↺ ↻) made a new history entry and kept the photo before the turn in the bucket. The turned photo now takes the place of the old one: no entry, the history entries that showed the old photo show the turned one, and the old files are deleted.
+- The preview of a photo picked for a new box is drawn on a canvas from the file itself instead of an object URL put into an `<img>`, which CodeQL reported as DOM text reinterpreted as HTML (`js/xss-through-dom`).
+- The API log names the route of a request (`DELETE /api/boxes/*/history/* -> 200`) instead of its path, so box numbers, history ids and anything else a caller puts in the path stay out of CloudWatch. CodeQL reported the path as clear-text logging of sensitive data (`py/clear-text-logging-sensitive-data`): in the tests, ids read from API answers that also carry temporary passwords went into the next path.
+
 ## v1.6.0
 
 ### Added
