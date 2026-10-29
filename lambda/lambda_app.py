@@ -89,8 +89,21 @@ def handler(event, context):
             result = response(500, {"error": translate(lang, "Внутренняя ошибка")})
     if 200 <= result["statusCode"] < 300:
         attach_media_cookies(result, event)
-    logger.info("%s %s -> %s", method, path, result["statusCode"])
+    logger.info("%s %s -> %s", method, route_label(path), result["statusCode"])
     return result
+
+
+# The log names the route, not the request: box numbers, history ids and
+# whatever else a caller puts in the path stay out of it. Each word comes from
+# this table, never from the request.
+ROUTE_WORDS = {word: word for word in (
+    "api", "me", "version", "admin", "users", "settings", "recognition-log", "recognition",
+    "rerun", "trash", "restore", "boxes", "history", "photo", "complete", "drafts", "new",
+)}
+
+
+def route_label(path):
+    return "/" + "/".join(ROUTE_WORDS.get(part, "*") for part in path.split("/") if part)
 
 
 def route(method, parts, event):

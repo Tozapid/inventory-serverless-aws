@@ -16,6 +16,7 @@
 
 - Turning a photo (↺ ↻) made a new history entry and kept the photo before the turn in the bucket. The turned photo now takes the place of the old one: no entry, the history entries that showed the old photo show the turned one, and the old files are deleted.
 - The preview of a photo picked for a new box is drawn on a canvas from the file itself instead of an object URL put into an `<img>`, which CodeQL reported as DOM text reinterpreted as HTML (`js/xss-through-dom`).
+- The API log names the route of a request (`DELETE /api/boxes/*/history/* -> 200`) instead of its path, so box numbers, history ids and anything else a caller puts in the path stay out of CloudWatch. CodeQL reported the path as clear-text logging of sensitive data (`py/clear-text-logging-sensitive-data`): in the tests, ids read from API answers that also carry temporary passwords went into the next path.
 
 ## v1.6.0
 

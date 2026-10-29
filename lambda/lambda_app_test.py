@@ -76,6 +76,11 @@ class InventoryHelpersTest(unittest.TestCase):
         self.assertEqual(lambda_app.preview("кабель\nи лампа"), "кабель и лампа")
         self.assertTrue(lambda_app.preview("а" * 200).endswith("…"))
 
+    def test_the_log_names_the_route_not_the_request(self):
+        self.assertEqual(lambda_app.route_label("/api/boxes/A-7/history/2026-09-01T10:00:00.000Z#0a1b2c3d"), "/api/boxes/*/history/*")
+        self.assertEqual(lambda_app.route_label("/api/drafts/new"), "/api/drafts/new")
+        self.assertEqual(lambda_app.route_label("/"), "/")
+
     def test_clean_text_limits(self):
         self.assertEqual(lambda_app.clean_text(None, 10, "Описание"), "")
         with self.assertRaises(lambda_app.ApiError):
