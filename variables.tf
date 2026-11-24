@@ -57,10 +57,15 @@ variable "url_ttl_seconds" {
   description = "Lifetime of the signed upload forms returned by the API."
 }
 
-variable "reset_schedule" {
-  type        = string
-  default     = ""
-  description = "When the demo is wiped back to its initial state: the boxes of seed/boxes.json come back, the administrator gets admin_password back and other users go. An empty string, the default, turns the reset off."
+variable "reset_delay_hours" {
+  type        = number
+  default     = 0
+  description = "Hours after the first change through the API that the demo is wiped back to its initial state: the boxes of seed/boxes.json come back, the administrator gets admin_password back and other users go. 0, the default, turns the reset off. Nothing runs on a schedule: a demo nobody changes is not reset."
+
+  validation {
+    condition     = var.reset_delay_hours >= 0
+    error_message = "reset_delay_hours is a number of hours, 0 for no reset."
+  }
 }
 
 variable "access_logs_bucket" {

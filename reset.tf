@@ -1,19 +1,20 @@
-# Public demo: every hour the inventory goes back to a fresh deployment. Set
-# reset_schedule to "" to keep the data (and none of this is made).
+# Public demo: reset_delay_hours after a change the inventory goes back to a
+# fresh deployment. Set reset_delay_hours to 0 to keep the data (and none of
+# this is made).
 
 resource "aws_ssm_parameter" "admin_password" {
   #checkov:skip=CKV_AWS_337:The AWS managed SSM key is enough for a demo password that the README publishes.
   count = local.reset ? 1 : 0
 
   name        = "/${local.name}/admin-password"
-  description = "Password the hourly reset gives back to the demo administrator."
+  description = "Password the reset gives back to the demo administrator."
   type        = "SecureString"
   value       = var.admin_password
 
   lifecycle {
     precondition {
       condition     = var.admin_password != ""
-      error_message = "The reset gives the demo administrator admin_password back: set one, or turn the reset off with reset_schedule = \"\"."
+      error_message = "The reset gives the demo administrator admin_password back: set one, or turn the reset off with reset_delay_hours = 0."
     }
   }
 }
@@ -151,24 +152,54 @@ resource "aws_lambda_function" "reset" {
   depends_on = [aws_iam_role_policy.reset]
 }
 
-resource "aws_cloudwatch_event_rule" "reset" {
-  count               = local.reset ? 1 : 0
-  name                = "${local.name}-reset"
-  description         = "Wipe the demo inventory back to its initial state."
-  schedule_expression = var.reset_schedule
+# The timer of the reset. Nothing runs on a schedule: the first change through
+# the API (arm_reset in the function's code) makes a one-off schedule
+# <name>-reset of EventBridge Scheduler, which calls the reset function
+# reset_delay_hours later with this role and then deletes itself. A demo that
+# nobody changes is not reset, and costs nothing.
+locals {
+  reset_schedule_name      = "${local.name}-reset"
+  reset_function_arn       = "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.name}-reset"
+  reset_scheduler_role_arn = "arn:aws:iam::${local.account_id}:role/${local.name}-reset-scheduler"
 }
 
-resource "aws_cloudwatch_event_target" "reset" {
+data "aws_iam_policy_document" "reset_scheduler_assume" {
   count = local.reset ? 1 : 0
-  rule  = aws_cloudwatch_event_rule.reset[0].name
-  arn   = aws_lambda_function.reset[0].arn
+
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["scheduler.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+  }
 }
 
-resource "aws_lambda_permission" "reset" {
-  count         = local.reset ? 1 : 0
-  statement_id  = "AllowHourlyReset"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.reset[0].function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.reset[0].arn
+resource "aws_iam_role" "reset_scheduler" {
+  count = local.reset ? 1 : 0
+
+  name               = "${local.name}-reset-scheduler"
+  assume_role_policy = data.aws_iam_policy_document.reset_scheduler_assume[0].json
+}
+
+resource "aws_iam_role_policy" "reset_scheduler" {
+  count = local.reset ? 1 : 0
+
+  name = "${local.name}-reset-scheduler"
+  role = aws_iam_role.reset_scheduler[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = aws_lambda_function.reset[0].arn
+    }]
+  })
 }

@@ -10,7 +10,7 @@ Everything is stored in DynamoDB and S3 behind Cognito sign-in. Photos stay in a
 
 Sign in with `admin@example.com` / `Demo-Password-1` (the fields are filled in for you).
 
-The demo is public and wiped every hour: all boxes, photos, history and users go away, and the admin password is put back. Seven example boxes — four with photos — are written again after each wipe, so they are always there. Invitations do not send email in the demo; the temporary password is shown to the administrator instead. Photo recognition is off in the demo (see below).
+The demo is public and wiped six hours after the first change (a demo nobody changes is not wiped): all boxes, photos, history and users go away, and the admin password is put back. Seven example boxes — four with photos — are written again after each wipe, so they are always there. Invitations do not send email in the demo; the temporary password is shown to the administrator instead. Photo recognition is off in the demo (see below).
 
 ## Features
 
@@ -61,7 +61,7 @@ flowchart LR
 | API | API Gateway HTTP API with a Cognito JWT authorizer, Lambda (Python, arm64) |
 | Boxes, history, settings | DynamoDB on demand, one table |
 | Photos | Private S3 bucket; uploads with a five-minute presigned POST, reads through CloudFront `/media/*` with a one-hour signed cookie |
-| Demo reset | Lambda `reset.py`, EventBridge rule `rate(1 hour)` |
+| Demo reset | Lambda `reset.py`, a one-off EventBridge Scheduler schedule that the first change makes |
 
 ## What it costs
 
@@ -71,7 +71,7 @@ Estimate for **light use** — a handful of people, 200 boxes, 20,000 API calls,
 
 | Service | Usage | Price | Per month |
 | --- | --- | --- | --- |
-| Lambda (API + 720 hourly resets) | ~21,000 invocations, 256 MB | free allowance | $0.00 |
+| Lambda (API and the resets after changes) | ~21,000 invocations, 256 MB | free allowance | $0.00 |
 | API Gateway HTTP API | 20,000 requests | ~$1.20 per million | $0.02 |
 | DynamoDB on demand | 1,000 writes, 50,000 reads, < 1 GB | ~$0.76 / $0.15 per million, storage free | $0.01 |
 | DynamoDB point-in-time recovery | < 0.1 GB | ~$0.24 per GB | < $0.01 |
@@ -91,7 +91,7 @@ The root of this repository is the module. It makes no providers: the caller pas
 
 ```hcl
 module "inventory" {
-  source = "git::https://github.com/Tozapid/inventory-serverless-aws.git?ref=v1.8.1"
+  source = "git::https://github.com/Tozapid/inventory-serverless-aws.git?ref=v1.9.0"
 
   providers = {
     aws        = aws
@@ -117,7 +117,7 @@ module "inventory" {
 | `recognition` | `true` | Each user may set a Grok API key (see [Photo recognition](#photo-recognition)) |
 | `photo_max_bytes`, `url_ttl_seconds` | 6 MB, `900` | Largest stored photo and the lifetime of an upload form |
 | `demo` | `false` | Public demo: the sign-in published and filled in, no invitation mails, the photos go with a destroy |
-| `reset_schedule` | `""` | The hourly reset of the demo (`rate(1 hour)` there) with the example boxes of `seed/` |
+| `reset_delay_hours` | `0` | The reset of the demo, that many hours after the first change (`6` there), with the example boxes of `seed/` |
 | `access_logs_bucket` | `""` | Bucket of the access logs (see [Access logs](#access-logs)) |
 | `media_key_from` | preview: its site | Stack whose CloudFront key signs the photo cookies |
 | `releases_repository` | `Tozapid/inventory-serverless-aws` | The releases Settings → Version compares with |
@@ -128,7 +128,7 @@ An account holds at most ten CloudFront public keys. A preview (`<name>-pr<N>`) 
 
 ### The demo
 
-[`demo/`](demo) is the root module of the public demo: the module from `../` with `demo = true`, the published sign-in, no invitation mails, no photo recognition, the hourly reset and no domain, so it answers at its CloudFront address and touches no DNS.
+[`demo/`](demo) is the root module of the public demo: the module from `../` with `demo = true`, the published sign-in, no invitation mails, no photo recognition, the reset six hours after a change and no domain, so it answers at its CloudFront address and touches no DNS.
 
 ## Deploy
 

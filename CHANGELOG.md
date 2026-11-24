@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.9.0
+
+### Changed
+
+- The demo is reset six hours after the first change instead of every hour, and not at all while nobody changes anything: most hours of a demo cost nothing now. The first change through the API (any request but a read that succeeds) makes a one-off schedule `<name>-reset` of EventBridge Scheduler, which calls the reset function `reset_delay_hours` later with the role `<name>-reset-scheduler` and then deletes itself; while it waits, further changes make none. The EventBridge rule of the hourly reset is gone. `reset_schedule` became `reset_delay_hours`, a number of hours (`0`, the default, no reset; `6` in the demo).
+- The sign-in page of the demo says when it goes back to the start: six hours after a change.
+- The settings of the demo no longer offer the password and two-factor authentication of the shared administrator: they are changed in Cognito, not through the API, so they would start no reset and could lock the next visitor out.
+
 ## v1.8.1
 
 ### Removed

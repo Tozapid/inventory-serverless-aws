@@ -89,6 +89,7 @@ def handler(event, context):
             result = response(500, {"error": translate(lang, "Внутренняя ошибка")})
     if 200 <= result["statusCode"] < 300:
         attach_media_cookies(result, event)
+    arm_reset(method, result["statusCode"])
     logger.info("%s %s -> %s", method, route_label(path), result["statusCode"])
     return result
 
@@ -2150,3 +2151,44 @@ def release_notes(value):
     parser.close()
     lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
     return "\n".join(line for line in lines if line)
+
+
+# The demo reset (reset.tf): the first change through the API starts a
+# one-off schedule of EventBridge Scheduler, which calls the reset function
+# RESET_DELAY_HOURS later and then deletes itself; while it waits, further
+# changes start none. A demo nobody changes is not reset at all.
+_reset_armed_until = 0.0
+_scheduler = None
+
+
+def arm_reset(method, status):
+    global _reset_armed_until, _scheduler
+    name = os.environ.get("RESET_SCHEDULE_NAME")
+    if not name or method in ("GET", "HEAD", "OPTIONS") or not 200 <= status < 300 or time.time() < _reset_armed_until:
+        return
+    from datetime import datetime as _datetime, timedelta as _timedelta, timezone as _timezone
+    at = _datetime.now(_timezone.utc) + _timedelta(hours=float(os.environ.get("RESET_DELAY_HOURS") or 6))
+    try:
+        if _scheduler is None:
+            import boto3 as _boto3
+            _scheduler = _boto3.client("scheduler")
+        _scheduler.create_schedule(
+            Name=name,
+            ScheduleExpression="at(%s)" % at.strftime("%Y-%m-%dT%H:%M:%S"),
+            ScheduleExpressionTimezone="UTC",
+            FlexibleTimeWindow={"Mode": "OFF"},
+            Target={
+                "Arn": os.environ["RESET_FUNCTION_ARN"],
+                "RoleArn": os.environ["RESET_ROLE_ARN"],
+                "Input": json.dumps({"reason": "changes"}),
+            },
+            ActionAfterCompletion="DELETE",
+        )
+        _reset_armed_until = at.timestamp()
+    except Exception as exc:
+        if (getattr(exc, "response", None) or {}).get("Error", {}).get("Code") == "ConflictException":
+            # A reset is already waiting; look again in ten minutes.
+            _reset_armed_until = time.time() + 600
+        else:
+            import logging as _logging
+            _logging.getLogger().exception("the demo reset was not scheduled")

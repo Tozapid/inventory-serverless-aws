@@ -1,4 +1,4 @@
-# Example photos of the demo. The hourly reset writes the boxes from
+# Example photos of the demo. The reset writes the boxes from
 # seed/boxes.json again and leaves seed/ in the media bucket alone. An
 # inventory without a reset gets neither.
 

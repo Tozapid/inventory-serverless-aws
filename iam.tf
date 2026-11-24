@@ -89,6 +89,33 @@ data "aws_iam_policy_document" "lambda" {
       values   = ["boxes/*"]
     }
   }
+
+  # The demo only: the first change starts the timer of the reset (reset.tf).
+  dynamic "statement" {
+    for_each = local.reset ? [1] : []
+
+    content {
+      sid       = "ScheduleTheReset"
+      actions   = ["scheduler:CreateSchedule"]
+      resources = ["arn:aws:scheduler:${local.region}:${local.account_id}:schedule/default/${local.reset_schedule_name}"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.reset ? [1] : []
+
+    content {
+      sid       = "PassTheResetRole"
+      actions   = ["iam:PassRole"]
+      resources = [local.reset_scheduler_role_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["scheduler.amazonaws.com"]
+      }
+    }
+  }
 }
 
 resource "aws_iam_role" "lambda" {

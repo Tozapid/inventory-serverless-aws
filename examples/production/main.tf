@@ -28,7 +28,7 @@ provider "aws" {
 }
 
 module "inventory" {
-  source = "git::https://github.com/Tozapid/inventory-serverless-aws.git?ref=v1.8.1"
+  source = "git::https://github.com/Tozapid/inventory-serverless-aws.git?ref=v1.9.0"
 
   providers = {
     aws        = aws
