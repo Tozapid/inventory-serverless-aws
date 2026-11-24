@@ -32,7 +32,7 @@ resource "aws_s3_object" "config" {
     # The admin sign-in reaches the page only in demo mode.
     demo_email  = var.demo ? var.admin_email : ""
     demo_pass   = var.demo ? var.admin_password : ""
-    reset_every = var.reset_schedule
+    reset_every = var.reset_delay_hours
     recognition = var.recognition
   })
 }

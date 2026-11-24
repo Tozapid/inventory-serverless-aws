@@ -1,3 +1,4 @@
+from unittest import mock
 import base64
 import io
 import json
@@ -961,6 +962,62 @@ class VersionTest(unittest.TestCase):
         info = lambda_app.version_info()
         self.assertEqual((info["version"], info["url"], info["latest"], info["error"]), ("v1.9.0", None, None, None))
         self.assertEqual(self.urls, [])
+
+
+class ArmResetTest(unittest.TestCase):
+    """The first change of the demo schedules its reset once."""
+
+    def setUp(self):
+        self.calls = []
+        test = self
+
+        class Scheduler:
+            def create_schedule(self, **kwargs):
+                test.calls.append(kwargs)
+                if len(test.calls) > 1:
+                    error = Exception("exists")
+                    error.response = {"Error": {"Code": "ConflictException"}}
+                    raise error
+
+        self.env = mock.patch.dict(os.environ, {
+            "RESET_SCHEDULE_NAME": "demo-reset", "RESET_DELAY_HOURS": "6",
+            "RESET_FUNCTION_ARN": "arn:aws:lambda:eu-central-1:1:function:demo-reset",
+            "RESET_ROLE_ARN": "arn:aws:iam::1:role/demo-reset-scheduler",
+        })
+        self.env.start()
+        lambda_app._scheduler = Scheduler()
+        lambda_app._reset_armed_until = 0.0
+
+    def tearDown(self):
+        self.env.stop()
+        lambda_app._scheduler = None
+        lambda_app._reset_armed_until = 0.0
+
+    def test_reads_and_errors_start_nothing(self):
+        lambda_app.arm_reset("GET", 200)
+        lambda_app.arm_reset("POST", 400)
+        self.assertEqual(self.calls, [])
+
+    def test_first_change_schedules_once(self):
+        lambda_app.arm_reset("POST", 200)
+        lambda_app.arm_reset("PUT", 200)
+        self.assertEqual(len(self.calls), 1)
+        call = self.calls[0]
+        self.assertEqual(call["Name"], "demo-reset")
+        self.assertTrue(call["ScheduleExpression"].startswith("at(20"))
+        self.assertEqual(call["ActionAfterCompletion"], "DELETE")
+        self.assertEqual(call["Target"]["Arn"], "arn:aws:lambda:eu-central-1:1:function:demo-reset")
+
+    def test_a_waiting_reset_is_left_alone(self):
+        self.calls.append({})  # a reset is waiting already: the next call conflicts
+        lambda_app.arm_reset("DELETE", 204)
+        lambda_app.arm_reset("POST", 200)
+        self.assertEqual(len(self.calls), 2)  # one try, then ten minutes of quiet
+
+    def test_off_without_a_reset(self):
+        with mock.patch.dict(os.environ, {"RESET_SCHEDULE_NAME": ""}):
+            lambda_app.arm_reset("POST", 200)
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == "__main__":

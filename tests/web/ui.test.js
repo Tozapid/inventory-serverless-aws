@@ -26,14 +26,15 @@ function chromePath() {
   return candidates.find((file) => file && fs.existsSync(file));
 }
 
-function config(recognition) {
+// demo: the public demo, whose settings have no password or 2FA.
+function config(recognition, demo = true) {
   return "window.INVENTORY_CONFIG = " + JSON.stringify({
     region: "eu-central-1",
     userPoolId: "eu-central-1_test",
     clientId: "test",
     apiBase: "/api",
     recognition,
-    demo: { email: ADMIN.email, password: ADMIN.password, reset: "rate(1 hour)" },
+    demo: demo ? { email: ADMIN.email, password: ADMIN.password, reset: 6 } : null,
   }) + ";";
 }
 
@@ -284,7 +285,7 @@ test.after(async () => {
 });
 
 // A fresh browser profile and a fresh API for each test.
-async function openInventory(t, { signedIn = true, lang = "en", totp = false, recognition = false, at = "/", api = fakeApi() } = {}) {
+async function openInventory(t, { signedIn = true, lang = "en", totp = false, recognition = false, demo = true, at = "/", api = fakeApi() } = {}) {
   if (!executablePath) {
     if (process.env.CI) throw new Error("Chrome not found; set CHROME_PATH");
     t.skip("Chrome not found; set CHROME_PATH to run the interface tests");
@@ -313,7 +314,7 @@ async function openInventory(t, { signedIn = true, lang = "en", totp = false, re
       const [status, data] = api.handle(request.method(), url, body);
       return reply(status, "application/json", JSON.stringify(data));
     }
-    if (url.pathname === "/config.js") return reply(200, "text/javascript", config(recognition));
+    if (url.pathname === "/config.js") return reply(200, "text/javascript", config(recognition, demo));
     if (url.pathname.startsWith("/media/seed/")) {
       const photo = path.join(SEED, url.pathname.slice("/media/seed/".length));
       return fs.existsSync(photo) ? reply(200, "image/jpeg", fs.readFileSync(photo)) : reply(403, "text/plain", "denied");
@@ -670,7 +671,7 @@ test("sign in asks for the authenticator code", async (t) => {
 });
 
 test("the new password is typed twice", async (t) => {
-  const opened = await openInventory(t);
+  const opened = await openInventory(t, { demo: false });
   if (!opened) return;
   const { page } = opened;
   await openSettings(page, "Password");
@@ -689,7 +690,7 @@ test("the new password is typed twice", async (t) => {
 });
 
 test("two-factor authentication is turned on and off in the settings", async (t) => {
-  const wiki = await openInventory(t);
+  const wiki = await openInventory(t, { demo: false });
   if (!wiki) return;
   const { page } = wiki;
   await openSettings(page, "Two-factor authentication");
@@ -714,14 +715,15 @@ test("two-factor authentication is turned on and off in the settings", async (t)
 test("recognition settings stay hidden while recognition is off", async (t) => {
   const off = await openInventory(t);
   if (!off) return;
-  await openSettings(off.page, "Password");
+  await openSettings(off.page, "Language");
   const tabs = await off.page.$$eval(".dialog [role=tab]", (nodes) => nodes.map((node) => node.textContent));
-  assert.deepEqual(tabs, ["Password", "Two-factor authentication", "Language", "Labels", "Trash", "Users", "Version"]);
+  // The demo: no password or 2FA of the shared administrator.
+  assert.deepEqual(tabs, ["Language", "Labels", "Trash", "Users", "Version"]);
   assert.equal(off.api.routes("GET /settings").length, 0);
 });
 
 test("recognition settings show when it is on", async (t) => {
-  const on = await openInventory(t, { recognition: true });
+  const on = await openInventory(t, { recognition: true, demo: false });
   if (!on) return;
   await openSettings(on.page, "Recognition");
   await on.page.waitForSelector(".settings-body input[type=password]");

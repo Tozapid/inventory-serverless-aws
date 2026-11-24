@@ -458,7 +458,7 @@
         el("h1", {}, t("Инвентарь коробок")),
         demo.email ? el("p", { class: "demo-note" }, [
           t("Демо: {email} / {password}.", { email: demo.email, password: demo.password }),
-          demo.reset ? " " + t("Все данные и пользователи стираются каждый час.") : "",
+          demo.reset ? " " + t("Через {hours} ч после изменений все данные и пользователи стираются.", { hours: demo.reset }) : "",
         ]) : null,
         form,
         el("div", { class: "login-lang" }, [
@@ -1727,14 +1727,17 @@
     } catch (error) {
       // Offline or signed out: show what the current session allows.
     }
-    const sections = [["password", t("Пароль")], ["totp", t("Двухфакторная аутентификация")]];
+    // The demo shares one administrator: a password or 2FA changed in Cognito
+    // would lock out the next visitor, and the reset only follows changes made
+    // through the API.
+    const sections = config.demo ? [] : [["password", t("Пароль")], ["totp", t("Двухфакторная аутентификация")]];
     if (config.recognition) sections.push(["recognition", t("Распознавание")]);
     sections.push(["language", t("Язык")]);
     sections.push(["labels", t("Этикетки")]);
     sections.push(["trash", t("Корзина")]);
     if (state.admin) sections.push(["users", t("Пользователи")]);
     sections.push(["version", t("Версия")]);
-    let current = sections.some(([key]) => key === section) ? section : "password";
+    let current = sections.some(([key]) => key === section) ? section : sections[0][0];
     const body = el("div", { class: "settings-body" });
     const tabs = el("div", { class: "tabs", role: "tablist" });
     const wrap = el("div", { class: "dialog-wrap", onclick: (event) => { if (event.target === wrap) wrap.remove(); } }, [
