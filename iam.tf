@@ -13,13 +13,13 @@ data "aws_iam_policy_document" "lambda" {
   statement {
     sid       = "StartRecognition"
     actions   = ["lambda:InvokeFunction"]
-    resources = ["arn:aws:lambda:${var.region}:${local.account_id}:function:${local.name}-api"]
+    resources = ["arn:aws:lambda:${local.region}:${local.account_id}:function:${local.name}-api"]
   }
 
   statement {
     sid       = "ReadMediaSigningKey"
     actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${var.region}:${local.account_id}:parameter${local.media_key.private_key_parameter}"]
+    resources = ["arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.media_key.private_key_parameter}"]
   }
 
   statement {

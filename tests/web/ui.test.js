@@ -10,7 +10,7 @@ const puppeteer = require("puppeteer-core");
 const { WEB, SEED } = require("./load");
 
 const ORIGIN = "https://inventory.test";
-const ADMIN = { email: "admin@example.com", password: "admin123" };
+const ADMIN = { email: "admin@example.com", password: "Demo-Password-1" };
 const TOTP_CODE = "123456";
 const TOTP_SECRET = "JBSWY3DPEHPK3PXP";
 
@@ -366,7 +366,7 @@ test("sign in with the demo account", async (t) => {
   const { page } = wiki;
   await page.waitForSelector(".login form");
   assert.equal(await page.$eval('input[type="email"]', (node) => node.value), ADMIN.email);
-  assert.match(await text(page, ".demo-note"), /admin@example\.com \/ admin123/);
+  assert.match(await text(page, ".demo-note"), /admin@example\.com \/ Demo-Password-1/);
 
   await page.$eval('input[type="password"]', (node) => { node.value = "wrong"; });
   await page.click(".login button.primary");

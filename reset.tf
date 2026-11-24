@@ -1,18 +1,27 @@
-# Public demo: every hour the inventory goes back to a fresh deployment.
-# Set reset_schedule to "" to keep data.
+# Public demo: every hour the inventory goes back to a fresh deployment. Set
+# reset_schedule to "" to keep the data (and none of this is made).
 
 resource "aws_ssm_parameter" "admin_password" {
   #checkov:skip=CKV_AWS_337:The AWS managed SSM key is enough for a demo password that the README publishes.
+  count = local.reset ? 1 : 0
+
   name        = "/${local.name}/admin-password"
   description = "Password the hourly reset gives back to the demo administrator."
   type        = "SecureString"
   value       = var.admin_password
+
+  lifecycle {
+    precondition {
+      condition     = var.admin_password != ""
+      error_message = "The reset gives the demo administrator admin_password back: set one, or turn the reset off with reset_schedule = \"\"."
+    }
+  }
 }
 
 # The reset writes the example boxes with the API's own item builders.
 data "archive_file" "reset" {
   type        = "zip"
-  output_path = "${path.module}/.build/reset.zip"
+  output_path = "${path.root}/.build/${local.name}-reset.zip"
 
   source {
     content  = file("${path.module}/lambda/reset.py")
@@ -33,15 +42,19 @@ data "archive_file" "reset" {
 resource "aws_cloudwatch_log_group" "reset" {
   #checkov:skip=CKV_AWS_158:CloudWatch encryption with a customer key is not worth a monthly charge here.
   #checkov:skip=CKV_AWS_338:Thirty days is enough for reset logs.
+  count = local.reset ? 1 : 0
+
   name              = "/aws/lambda/${local.name}-reset"
   retention_in_days = 30
 }
 
 data "aws_iam_policy_document" "reset" {
+  count = local.reset ? 1 : 0
+
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.reset.arn}:*"]
+    resources = ["${aws_cloudwatch_log_group.reset[0].arn}:*"]
   }
 
   statement {
@@ -80,19 +93,23 @@ data "aws_iam_policy_document" "reset" {
   statement {
     sid       = "AdminPassword"
     actions   = ["ssm:GetParameter"]
-    resources = [aws_ssm_parameter.admin_password.arn]
+    resources = [aws_ssm_parameter.admin_password[0].arn]
   }
 }
 
 resource "aws_iam_role" "reset" {
+  count = local.reset ? 1 : 0
+
   name               = "${local.name}-reset"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "reset" {
+  count = local.reset ? 1 : 0
+
   name   = "${local.name}-reset"
-  role   = aws_iam_role.reset.id
-  policy = data.aws_iam_policy_document.reset.json
+  role   = aws_iam_role.reset[0].id
+  policy = data.aws_iam_policy_document.reset[0].json
 }
 
 resource "aws_lambda_function" "reset" {
@@ -102,8 +119,10 @@ resource "aws_lambda_function" "reset" {
   #checkov:skip=CKV_AWS_117:The function only calls public AWS endpoints.
   #checkov:skip=CKV_AWS_173:Environment values are resource names, not secrets.
   #checkov:skip=CKV_AWS_272:Code signing is not used here.
+  count = local.reset ? 1 : 0
+
   function_name = "${local.name}-reset"
-  role          = aws_iam_role.reset.arn
+  role          = aws_iam_role.reset[0].arn
   runtime       = "python3.14"
   architectures = ["arm64"]
   handler       = "reset.handler"
@@ -119,37 +138,37 @@ resource "aws_lambda_function" "reset" {
       MEDIA_BUCKET             = aws_s3_bucket.media.id
       USER_POOL_ID             = aws_cognito_user_pool.main.id
       ADMIN_EMAIL              = var.admin_email
-      ADMIN_PASSWORD_PARAMETER = aws_ssm_parameter.admin_password.name
+      ADMIN_PASSWORD_PARAMETER = aws_ssm_parameter.admin_password[0].name
       ADMIN_GROUP              = aws_cognito_user_group.admins.name
     }
   }
 
   logging_config {
     log_format = "Text"
-    log_group  = aws_cloudwatch_log_group.reset.name
+    log_group  = aws_cloudwatch_log_group.reset[0].name
   }
 
   depends_on = [aws_iam_role_policy.reset]
 }
 
 resource "aws_cloudwatch_event_rule" "reset" {
-  count               = var.reset_schedule == "" ? 0 : 1
+  count               = local.reset ? 1 : 0
   name                = "${local.name}-reset"
   description         = "Wipe the demo inventory back to its initial state."
   schedule_expression = var.reset_schedule
 }
 
 resource "aws_cloudwatch_event_target" "reset" {
-  count = var.reset_schedule == "" ? 0 : 1
+  count = local.reset ? 1 : 0
   rule  = aws_cloudwatch_event_rule.reset[0].name
-  arn   = aws_lambda_function.reset.arn
+  arn   = aws_lambda_function.reset[0].arn
 }
 
 resource "aws_lambda_permission" "reset" {
-  count         = var.reset_schedule == "" ? 0 : 1
+  count         = local.reset ? 1 : 0
   statement_id  = "AllowHourlyReset"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.reset.function_name
+  function_name = aws_lambda_function.reset[0].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.reset[0].arn
 }

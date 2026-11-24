@@ -108,7 +108,7 @@
   function authMessage(error) {
     const code = error && (error.code || error.name);
     if (code === "NotAuthorizedException" || code === "UserNotFoundException") return t("Неверная почта или пароль");
-    if (code === "InvalidPasswordException") return t("Пароль должен быть от 8 символов и содержать строчную букву и цифру");
+    if (code === "InvalidPasswordException") return t("Пароль должен быть от 12 символов и содержать буквы разного регистра, цифру и знак");
     if (code === "CodeMismatchException" || code === "EnableSoftwareTokenMFAException" || code === "ExpiredCodeException") return t("Неверный код");
     return (error && error.message) || t("Не получилось");
   }
@@ -471,7 +471,7 @@
 
   function showNewPassword(user, attributes, message) {
     const error = el("p", { class: "error" }, message || "");
-    const password = el("input", { type: "password", autocomplete: "new-password", required: "required", minlength: "8" });
+    const password = el("input", { type: "password", autocomplete: "new-password", required: "required", minlength: "12" });
     root.replaceChildren(el("main", { class: "login" }, [
       el("section", { class: "login-card" }, [
         el("h1", {}, t("Новый пароль")),
@@ -2156,8 +2156,8 @@
   function passwordSection(body) {
     const error = el("p", { class: "error", role: "alert" });
     const oldPassword = el("input", { type: "password", autocomplete: "current-password", required: true });
-    const newPassword = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "8" });
-    const again = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "8" });
+    const newPassword = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "12" });
+    const again = el("input", { type: "password", autocomplete: "new-password", required: true, minlength: "12" });
     const button = el("button", { type: "submit", class: "primary" }, t("Сменить пароль"));
     const form = el("form", {
       onsubmit: async (event) => {
@@ -2181,7 +2181,7 @@
       el("label", {}, [t("Текущий пароль"), oldPassword]),
       el("label", {}, [t("Новый пароль"), newPassword]),
       el("label", {}, [t("Новый пароль ещё раз"), again]),
-      el("p", { class: "hint" }, t("Не короче 8 символов, со строчной буквой и цифрой.")),
+      el("p", { class: "hint" }, t("Не короче 12 символов, с заглавной и строчной буквой, цифрой и знаком.")),
       el("div", { class: "dialog-actions" }, [button]),
       error,
     ]);

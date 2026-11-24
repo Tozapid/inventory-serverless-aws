@@ -54,26 +54,6 @@ data "aws_ssm_parameter" "shared_media_key" {
   name  = "/${local.media_key_from}/cloudfront-key-ids"
 }
 
-# The key existed before it became optional.
-moved {
-  from = tls_private_key.media
-  to   = tls_private_key.media[0]
-}
-
-moved {
-  from = aws_cloudfront_public_key.media
-  to   = aws_cloudfront_public_key.media[0]
-}
-
-moved {
-  from = aws_cloudfront_key_group.media
-  to   = aws_cloudfront_key_group.media[0]
-}
-
-moved {
-  from = aws_ssm_parameter.media_signing_key
-  to   = aws_ssm_parameter.media_signing_key[0]
-}
 
 resource "aws_cloudfront_function" "api_host" {
   provider = aws.global
@@ -239,6 +219,7 @@ resource "aws_cloudfront_distribution" "web" {
   provider            = aws.global
   enabled             = true
   is_ipv6_enabled     = true
+  aliases             = local.custom_domain ? [var.domain_name] : []
   comment             = local.name
   price_class         = "PriceClass_100"
   default_root_object = "index.html"
@@ -262,7 +243,7 @@ resource "aws_cloudfront_distribution" "web" {
   }
 
   origin {
-    domain_name = "${aws_apigatewayv2_api.http.id}.execute-api.${var.region}.amazonaws.com"
+    domain_name = "${aws_apigatewayv2_api.http.id}.execute-api.${local.region}.amazonaws.com"
     origin_id   = "api"
 
     custom_origin_config {
@@ -331,9 +312,11 @@ resource "aws_cloudfront_distribution" "web" {
     }
   }
 
-  # The demo lives on the CloudFront address, so the default certificate is
-  # used. A custom domain would add an ACM certificate and an alias here.
+  # The demo answers at its CloudFront address with CloudFront's certificate.
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn            = local.custom_domain ? aws_acm_certificate_validation.web[0].certificate_arn : null
+    cloudfront_default_certificate = !local.custom_domain
+    ssl_support_method             = local.custom_domain ? "sni-only" : null
+    minimum_protocol_version       = local.custom_domain ? "TLSv1.2_2021" : "TLSv1"
   }
 }
