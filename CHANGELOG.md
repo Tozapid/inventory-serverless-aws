@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.0
+
+### Changed
+
+- The repository is a Terraform module: the root makes no providers and no backend (the caller passes `aws` and `aws.global`), and an inventory is a module call pinned to a release tag, `git::https://github.com/Tozapid/inventory-serverless-aws.git?ref=vX.Y.Z`; a newer version of an inventory is a newer `ref`. The public demo is a call of the module in `demo/`, which the CI deploys (`working_directory: demo`); `demo/moved.tf` moves its resources under `module.inventory` in the state. The defaults are those of a private inventory (`demo = false`, no reset, invitation mails and photo recognition on); `name` and `admin_email` have none. The region comes from the provider, the tags from its `default_tags`; the zips of the functions are built in `.build/` of the root module. `examples/production/main.tf` is a starting point for production.
+- An inventory on its own domain: `domain_name` and `route53_zone_name` add the certificate, the alias of the distribution and the A and AAAA records; the invitation names that address. Empty, the inventory answers at its CloudFront address, as the demo does.
+- Passwords have at least 12 characters with upper and lower case letters, a digit and a symbol, in the user pool and in the fields of the page; `password_min_length` is gone. The demo administrator signs in with `Demo-Password-1`.
+- Without a reset (`reset_schedule = ""`) none of its resources is made, the demo password in SSM included; `admin_password` empty makes Cognito mail the first user a temporary password. Apply no longer takes back a password or language the first user changed.
+- Phones: a dialog fits the visible screen (`100dvh`), with its title and buttons in view under the bars of the browser.
+
 ## v1.7.0
 
 ### Added

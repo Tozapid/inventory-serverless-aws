@@ -1,5 +1,10 @@
 output "site_url" {
   description = "Address of the inventory."
+  value       = local.site_url
+}
+
+output "cloudfront_url" {
+  description = "CloudFront address of the inventory."
   value       = "https://${aws_cloudfront_distribution.web.domain_name}"
 }
 
@@ -16,4 +21,9 @@ output "cognito_client_id" {
 output "admin_username" {
   description = "Sign-in of the first administrator."
   value       = var.admin_email
+}
+
+output "function_name" {
+  description = "Lambda function of the API and the photo recognition."
+  value       = aws_lambda_function.api.function_name
 }

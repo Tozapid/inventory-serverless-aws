@@ -3,7 +3,7 @@
 # inventory without a reset gets neither.
 
 locals {
-  seed_photos = var.reset_schedule == "" ? toset([]) : fileset("${path.module}/seed/photos", "*.jpg")
+  seed_photos = !local.reset ? toset([]) : fileset("${path.module}/seed/photos", "*.jpg")
 }
 
 resource "aws_s3_object" "seed" {

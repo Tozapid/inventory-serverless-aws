@@ -10,11 +10,11 @@ resource "aws_cognito_user_pool" "main" {
   }
 
   password_policy {
-    minimum_length                   = var.password_min_length
+    minimum_length                   = 12
     require_lowercase                = true
-    require_uppercase                = false
+    require_uppercase                = true
     require_numbers                  = true
-    require_symbols                  = false
+    require_symbols                  = true
     temporary_password_validity_days = 7
   }
 
@@ -23,8 +23,8 @@ resource "aws_cognito_user_pool" "main" {
 
     invite_message_template {
       email_subject = "Box inventory invitation"
-      email_message = "You have been invited to the box inventory at https://${aws_cloudfront_distribution.web.domain_name}<br><br>Sign-in: {username}<br>Temporary password: {####}<br><br>You will choose your own password at first sign-in. The temporary one works for 7 days."
-      sms_message   = "Box inventory: sign-in {username}, temporary password {####}"
+      email_message = "You have been invited to the box inventory at ${local.site_url}<br><br>Sign-in: {username}<br>Temporary password: {####}<br><br>You will choose your own password at first sign-in. The temporary one works for 7 days."
+      sms_message   = "Box inventory ${local.site_url}: sign-in {username}, temporary password {####}"
     }
   }
 
@@ -70,15 +70,24 @@ resource "aws_cognito_user_pool_client" "web" {
   write_attributes = ["locale"]
 }
 
+# With admin_password the first user gets it as a permanent password and no
+# mail; without, Cognito mails admin_email a temporary password.
 resource "aws_cognito_user" "admin" {
-  user_pool_id   = aws_cognito_user_pool.main.id
-  username       = var.admin_email
-  password       = var.admin_password
-  message_action = "SUPPRESS"
+  user_pool_id             = aws_cognito_user_pool.main.id
+  username                 = var.admin_email
+  password                 = var.admin_password != "" ? var.admin_password : null
+  message_action           = var.admin_password != "" ? "SUPPRESS" : null
+  desired_delivery_mediums = var.admin_password != "" ? null : ["EMAIL"]
 
   attributes = {
     email          = var.admin_email
     email_verified = "true"
+  }
+
+  # The user may set their own password and language; apply must not take
+  # them back (the demo reset does that on its own).
+  lifecycle {
+    ignore_changes = [password, temporary_password, attributes["locale"]]
   }
 }
 

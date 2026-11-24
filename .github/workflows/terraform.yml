@@ -35,6 +35,8 @@ jobs:
     with:
       preview: ${{ inputs.preview || '' }}
       destroy: ${{ inputs.destroy || false }}
+      # The repository is a module; the demo is the root module in demo/.
+      working_directory: demo
     # The plan, apply and preview jobs trade GitHub's OIDC token for the AWS
     # role; the release job writes the tag and the release of the newest
     # CHANGELOG entry; the preview jobs comment on the pull request.
